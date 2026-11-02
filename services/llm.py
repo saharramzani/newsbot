@@ -19,7 +19,8 @@ def _gemini(system, user, search, max_tokens):
     body = {
         "systemInstruction": {"parts": [{"text": system}]},
         "contents": [{"role": "user", "parts": [{"text": user}]}],
-        "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.8},
+        "generationConfig": {"maxOutputTokens": max_tokens + 8000,  # thinking models spend part of the budget on reasoning
+                              "temperature": 0.8},
     }
     if search:
         body["tools"] = [{"google_search": {}}]
