@@ -1,4 +1,6 @@
 """Provider-agnostic LLM call. LLM_PROVIDER = gemini (free tier) | anthropic."""
+import time
+
 import httpx
 
 import config
@@ -24,10 +26,14 @@ def _gemini(system, user, search, max_tokens):
     }
     if search:
         body["tools"] = [{"google_search": {}}]
-    r = httpx.post(
-        GEMINI_URL.format(model=config.GEMINI_MODEL),
-        headers={"x-goog-api-key": config.GEMINI_API_KEY},  # proxy-injected secret may overwrite this
-        json=body, timeout=180)
+    for attempt in range(5):  # preview models often return transient 429/502/503
+        r = httpx.post(
+            GEMINI_URL.format(model=config.GEMINI_MODEL),
+            headers={"x-goog-api-key": config.GEMINI_API_KEY},  # proxy-injected secret may overwrite this
+            json=body, timeout=180)
+        if r.status_code not in (429, 502, 503) or attempt == 4:
+            break
+        time.sleep(4 * (attempt + 1))
     r.raise_for_status()
     data = r.json()
     cands = data.get("candidates") or []
