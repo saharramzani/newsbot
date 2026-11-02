@@ -19,6 +19,9 @@ from agents.writer import write_package
 from services import download, stt, tts, video
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+# httpx logs full URLs at INFO level, and Telegram URLs contain the bot token
+for noisy in ("httpx", "httpcore"):
+    logging.getLogger(noisy).setLevel(logging.WARNING)
 log = logging.getLogger("newsbot")
 URL_RE = re.compile(r"https?://\S+")
 
