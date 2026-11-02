@@ -20,7 +20,7 @@ def transcribe_words(audio_path, language="fa") -> list[dict]:
     words = []
     for seg in segments:
         for w in seg.words or []:
-            words.append({"word": w.word.strip(), "start": w.start, "end": w.end})
+            words.append({"word": w.word.strip(), "start": float(w.start), "end": float(w.end)})
     return words
 
 
