@@ -75,7 +75,7 @@ async def cmd_news(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data["job"] = {}
     await update.message.reply_text("🔎 در حال جست‌وجوی اخبار… (۱ تا ۳ دقیقه)")
     try:
-        items = await find_news()
+        items, sources = await find_news()
     except Exception as e:
         log.exception("scout failed")
         await update.message.reply_text(f"❌ جست‌وجو شکست خورد:\n{e}")
@@ -83,6 +83,9 @@ async def cmd_news(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     j = job(ctx)
     j.update(items=items, selected=set())
     await say(update, ctx, format_news(items))
+    if sources:
+        await say(update, ctx, "🔍 منابعی که جست‌وجو واقعاً به آن‌ها رسید (برای راستی‌آزمایی):\n"
+                  + "\n".join(f"• {s['title']} {s['uri']}" for s in sources[:12]))
     await ctx.bot.send_message(update.effective_chat.id, "کدام خبرها؟", reply_markup=news_keyboard(items, j["selected"]))
 
 
