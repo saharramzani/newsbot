@@ -11,7 +11,7 @@ from pathlib import Path
 
 from telegram import InlineKeyboardButton as Btn, InlineKeyboardMarkup as Markup, Update
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes,
-                          MessageHandler, filters)
+                          MessageHandler, PicklePersistence, filters)
 
 import config
 from agents.scout import find_news
@@ -161,19 +161,25 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if q.from_user.id not in config.ALLOWED_USER_IDS:
         await q.answer()
         return
-    await q.answer()
     j, d = job(ctx), q.data
+    if (d.startswith("sel:") or d == "go") and not j.get("items"):
+        await q.answer("این فهرست منقضی شده (ربات ری‌استارت شده). لطفا دوباره /news بزنید.", show_alert=True)
+        return
+    if d.startswith("sel:") and int(d[4:]) >= len(j["items"]):
+        await q.answer("این دکمه مربوط به فهرست قدیمی است. از آخرین فهرست استفاده کنید.", show_alert=True)
+        return
+    if d == "go" and not j.get("selected"):
+        await q.answer("حداقل یک خبر انتخاب کنید", show_alert=True)
+        return
+    await q.answer()
     if d == "cancel":
         ctx.user_data.pop("job", None)
         await q.edit_message_text("لغو شد.")
-    elif d.startswith("sel:") and j.get("items"):
+    elif d.startswith("sel:"):
         i = int(d[4:])
         j["selected"] ^= {i}
         await q.edit_message_reply_markup(news_keyboard(j["items"], j["selected"]))
     elif d == "go":
-        if not j.get("selected"):
-            await q.answer("حداقل یک خبر انتخاب کنید", show_alert=True)
-            return
         j["queue"] = [j["items"][i] for i in sorted(j["selected"])]
         await q.edit_message_text(f"{len(j['queue'])} خبر انتخاب شد. یکی‌یکی جلو می‌رویم.")
         await next_in_queue(update, ctx)
@@ -236,12 +242,19 @@ async def on_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await ask_narration_approval(update, ctx)
 
 
+async def on_error(update, ctx: ContextTypes.DEFAULT_TYPE):
+    log.error("handler error", exc_info=ctx.error)
+
+
 def main():
     if not config.TELEGRAM_BOT_TOKEN:
         raise SystemExit("TELEGRAM_BOT_TOKEN is not set")
     if not config.ALLOWED_USER_IDS:
         raise SystemExit("ALLOWED_USER_IDS is empty: refusing to run an open bot")
-    app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
+    # persist user_data so the news list / pipeline state survive a restart
+    persistence = PicklePersistence(config.WORK_DIR / "state.pickle", update_interval=5)
+    app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).persistence(persistence).build()
+    app.add_error_handler(on_error)
     allowed = filters.User(user_id=list(config.ALLOWED_USER_IDS))
     app.add_handler(CommandHandler("start", cmd_start, filters=allowed))
     app.add_handler(CommandHandler("news", cmd_news, filters=allowed))
