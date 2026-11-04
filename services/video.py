@@ -47,18 +47,57 @@ def duration(path: Path) -> float:
     return float(out.stdout.strip())
 
 
-def build_video(src: Path, narration: Path, ass: Path, out: Path, logo: Path | None = None) -> Path:
+def _plan_segments(srcs: list[Path], total: float) -> list[tuple[int, float, float]]:
+    """Cut the clips into short alternating shots that fill `total` seconds.
+
+    Returns [(source_index, start, length)]. Each source is read forward from where its
+    previous shot ended (wrapping around), so the montage does not repeat the same frames.
+    """
+    durs = []
+    for s in srcs:
+        try:
+            durs.append(max(duration(s), 0.5))
+        except Exception:
+            durs.append(10.0)
+    shot = min(5.0, max(2.5, total / max(len(srcs), 1))) if len(srcs) > 1 else total
+    pos = [min(1.0, d * 0.1) for d in durs]  # skip the first second (often a title card)
+    plan, t, k = [], 0.0, 0
+    while t < total - 0.01:
+        i = k % len(srcs)
+        length = min(shot, total - t, durs[i])
+        if pos[i] + length > durs[i]:
+            pos[i] = 0.0
+        plan.append((i, pos[i], length))
+        pos[i] += length
+        t += length
+        k += 1
+    return plan
+
+
+def build_video(srcs: list[Path] | Path, narration: Path, ass: Path, out: Path, logo: Path | None = None) -> Path:
+    """Montage the source clips (muted) under the narration, then add logo + subtitles. 9:16 output."""
+    if isinstance(srcs, Path):
+        srcs = [srcs]
     dur = duration(narration) + 0.5
-    cmd = ["ffmpeg", "-y", "-stream_loop", "-1", "-i", str(src), "-i", str(narration)]
+    plan = _plan_segments(srcs, dur)
+    cmd = ["ffmpeg", "-y"]
+    parts = []
+    for n, (i, start, length) in enumerate(plan):
+        # loop each input so a clip shorter than the shot still fills it
+        cmd += ["-stream_loop", "-1", "-ss", f"{start:.2f}", "-t", f"{length:.2f}", "-i", str(srcs[i])]
+        parts.append(f"[{n}:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},"
+                     f"setsar=1,fps=30,format=yuv420p,trim=duration={length:.2f},setpts=PTS-STARTPTS[s{n}]")
+    a_idx = len(plan)
+    cmd += ["-i", str(narration)]
     fonts = Path("assets/fonts")
     ass_filter = f"ass={ass}" + (f":fontsdir={fonts}" if fonts.exists() else "")
-    base = f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1,fps=30[bg]"
+    fc = ";".join(parts) + ";" + "".join(f"[s{n}]" for n in range(len(plan))) + f"concat=n={len(plan)}:v=1:a=0[bg]"
     if logo and logo.exists():
         cmd += ["-i", str(logo)]
-        fc = (f"{base};[2:v]scale=220:-1[lg];[bg][lg]overlay=W-w-50:70[ov];[ov]{ass_filter}[vout]")
+        fc += f";[{a_idx + 1}:v]scale=220:-1[lg];[bg][lg]overlay=W-w-50:70[ov];[ov]{ass_filter}[vout]"
     else:
-        fc = f"{base};[bg]{ass_filter}[vout]"
-    cmd += ["-filter_complex", fc, "-map", "[vout]", "-map", "1:a",
+        fc += f";[bg]{ass_filter}[vout]"
+    cmd += ["-filter_complex", fc, "-map", "[vout]", "-map", f"{a_idx}:a",
             "-t", f"{dur:.2f}", "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
             "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", str(out)]
     r = subprocess.run(cmd, capture_output=True, text=True)
