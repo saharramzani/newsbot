@@ -13,29 +13,54 @@ def _ts(t: float) -> str:
     return f"{int(h)}:{int(m):02d}:{s:05.2f}"
 
 
-def build_ass(words: list[dict], path: Path, group: int = 3) -> Path:
+# Caption box that hides the source clips' own subtitles. Narration is written on it.
+BOX_Y, BOX_H = 1380, 420            # covers the lower part of the frame where burned-in subs usually sit
+STRIPE_H = 16                       # yellow accent stripe on top of the box
+NAVY, YELLOW = "0x0B1F4B", "0xFFC400"
+TEXT_SIZE = 96
+HIGHLIGHT = "&H0000C4FF&"          # ASS colour (BGR) of the yellow above, for the word being spoken
+LOGO_W = 420
+
+
+def box_filter() -> str:
+    return (f"drawbox=x=0:y={BOX_Y}:w=iw:h={BOX_H}:color={NAVY}:t=fill,"
+            f"drawbox=x=0:y={BOX_Y}:w=iw:h={STRIPE_H}:color={YELLOW}:t=fill")
+
+
+def build_ass(words: list[dict], path: Path, group: int = 4) -> Path:
+    """Narration subtitles inside the caption box; the word being read is coloured yellow."""
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {W}
 PlayResY: {H}
-WrapStyle: 2
+WrapStyle: 0
 
 [V4+ Styles]
 Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
-Style: Default,{config.SUBTITLE_FONT},78,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,6,2,2,60,60,420,1
+Style: Default,{config.SUBTITLE_FONT},{TEXT_SIZE},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,2,0,5,70,70,0,-1
 
 [Events]
 Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
 """
+    pos = f"{{\\an5\\pos({W // 2},{BOX_Y + STRIPE_H + (BOX_H - STRIPE_H) // 2})}}"
+    clean = [w["word"].replace("{", "(").replace("}", ")") for w in words]
     lines = []
     for i in range(0, len(words), group):
         chunk = words[i:i + group]
-        # U+202B (RLE) + U+200F (RLM) force a right-to-left base direction so word order is correct
-        text = "‫‏" + " ".join(w["word"] for w in chunk).replace("{", "(").replace("}", ")") + "‏‬"
-        end = chunk[-1]["end"]
+        chunk_end = chunk[-1]["end"]
         if i + group < len(words):  # no gaps between subtitle groups
-            end = max(end, words[i + group]["start"])
-        lines.append(f"Dialogue: 0,{_ts(chunk[0]['start'])},{_ts(end)},Default,,0,0,0,,{text}")
+            chunk_end = max(chunk_end, words[i + group]["start"])
+        for k, w in enumerate(chunk):
+            start = chunk[0]["start"] if k == 0 else w["start"]
+            end = chunk[k + 1]["start"] if k + 1 < len(chunk) else chunk_end
+            if end <= start:
+                continue
+            parts = [f"{{\\c{HIGHLIGHT}}}{clean[i + n]}{{\\c&H00FFFFFF&}}" if n == k else clean[i + n]
+                     for n in range(len(chunk))]
+            # Encoding -1 (in the style) makes libass run bidi over the whole line, so the colour
+            # tags around the highlighted word do not break right-to-left word order
+            text = " ".join(parts)
+            lines.append(f"Dialogue: 0,{_ts(start)},{_ts(end)},Default,,0,0,0,,{pos}{text}")
     path.write_text(header + "\n".join(lines) + "\n", encoding="utf-8")
     return path
 
@@ -94,9 +119,10 @@ def build_video(srcs: list[Path] | Path, narration: Path, ass: Path, out: Path, 
     fc = ";".join(parts) + ";" + "".join(f"[s{n}]" for n in range(len(plan))) + f"concat=n={len(plan)}:v=1:a=0[bg]"
     if logo and logo.exists():
         cmd += ["-i", str(logo)]
-        fc += f";[{a_idx + 1}:v]scale=220:-1[lg];[bg][lg]overlay=W-w-50:70[ov];[ov]{ass_filter}[vout]"
+        fc += (f";[bg]{box_filter()}[bx];[{a_idx + 1}:v]scale={LOGO_W}:-1[lg];"
+               f"[bx][lg]overlay=W-w-50:80[ov];[ov]{ass_filter}[vout]")
     else:
-        fc += f";[bg]{ass_filter}[vout]"
+        fc += f";[bg]{box_filter()},{ass_filter}[vout]"
     cmd += ["-filter_complex", fc, "-map", "[vout]", "-map", f"{a_idx}:a",
             "-t", f"{dur:.2f}", "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
             "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", str(out)]
