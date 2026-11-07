@@ -20,6 +20,10 @@ ELEVENLABS_MODEL = get("ELEVENLABS_MODEL", "eleven_v3")
 LLM_PROVIDER = get("LLM_PROVIDER", "gemini")
 GEMINI_API_KEY = get("GEMINI_API_KEY", "")
 GEMINI_MODEL = get("GEMINI_MODEL", "gemini-2.5-flash")
+# tried in order when the main model is overloaded (503/429) or unavailable (404)
+GEMINI_FALLBACK_MODELS = [m.strip() for m in get(
+    "GEMINI_FALLBACK_MODELS", "gemini-3.5-flash-lite,gemini-flash-lite-latest,gemini-3-flash-preview,gemini-3.5-flash"
+).split(",") if m.strip()]
 SCOUT_MODEL = get("SCOUT_MODEL", "claude-opus-5-5")
 WRITER_MODEL = get("WRITER_MODEL", "claude-opus-5-5")
 WHISPER_MODEL = get("WHISPER_MODEL", "small")
