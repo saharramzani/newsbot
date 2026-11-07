@@ -11,7 +11,7 @@ from pathlib import Path
 
 from telegram import InlineKeyboardButton as Btn, InlineKeyboardMarkup as Markup, Update
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes,
-                          MessageHandler, filters)
+                          MessageHandler, PicklePersistence, filters)
 
 import config
 from agents.scout import find_news
@@ -163,6 +163,12 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     await q.answer()
     j, d = job(ctx), q.data
+    # state is lost if the bot restarted, or the button belongs to an older round
+    needs = {"go": "items", "pkg_redo": "current", "pkg_fb": "current", "pkg_ok": "pkg", "skip": "queue",
+             "nar_edit": "pkg", "nar_ok": "src"}
+    if (d.startswith("sel:") and not j.get("items")) or (d in needs and needs[d] not in j):
+        await q.message.reply_text("⏳ این دکمه منقضی شده (ربات ری‌استارت شده یا دور جدید شروع شده). دوباره /news بزنید.")
+        return
     if d == "cancel":
         ctx.user_data.pop("job", None)
         await q.edit_message_text("لغو شد.")
@@ -236,12 +242,24 @@ async def on_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await ask_narration_approval(update, ctx)
 
 
+async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE):
+    log.error("update failed", exc_info=ctx.error)
+    if isinstance(update, Update) and update.effective_chat:
+        try:
+            await ctx.bot.send_message(update.effective_chat.id, f"❌ خطای غیرمنتظره:\n{ctx.error}\n\nدوباره امتحان کنید یا /news")
+        except Exception:
+            pass
+
+
 def main():
     if not config.TELEGRAM_BOT_TOKEN:
         raise SystemExit("TELEGRAM_BOT_TOKEN is not set")
     if not config.ALLOWED_USER_IDS:
         raise SystemExit("ALLOWED_USER_IDS is empty: refusing to run an open bot")
-    app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
+    # concurrent_updates: one user's long step (search / video build) must not block other users' buttons.
+    # persistence: per-user progress survives a restart.
+    app = (Application.builder().token(config.TELEGRAM_BOT_TOKEN).concurrent_updates(True)
+           .persistence(PicklePersistence(filepath=config.WORK_DIR / "state.pickle")).build())
     allowed = filters.User(user_id=list(config.ALLOWED_USER_IDS))
     app.add_handler(CommandHandler("start", cmd_start, filters=allowed))
     app.add_handler(CommandHandler("news", cmd_news, filters=allowed))
@@ -249,6 +267,7 @@ def main():
     app.add_handler(MessageHandler(allowed & (filters.VIDEO | filters.Document.VIDEO), on_video))
     app.add_handler(MessageHandler(allowed & filters.TEXT & ~filters.COMMAND, on_text))
     app.add_handler(CallbackQueryHandler(on_callback))
+    app.add_error_handler(on_error)
     app.run_polling()
 
 
