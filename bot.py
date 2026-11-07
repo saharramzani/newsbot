@@ -76,10 +76,12 @@ async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_news(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    log.info("/news from %s", update.effective_user.id)
     ctx.user_data["job"] = {}
     await update.message.reply_text("🔎 در حال جست‌وجوی اخبار… (۱ تا ۳ دقیقه)")
     try:
         items, sources = await find_news()
+        log.info("scout returned %d items", len(items))
     except Exception as e:
         log.exception("scout failed")
         await update.message.reply_text(f"❌ جست‌وجو شکست خورد:\n{e}")
