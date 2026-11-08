@@ -20,7 +20,9 @@ async def check(c, name, url):
             return False, f"HTTP {r.status_code}"
         items = _parse(name, r.content)
         if not items:
-            return False, "no news items in the feed"
+            if b"<rss" in r.content[:500] or b"<feed" in r.content[:500]:
+                return True, "feed works, but has no news right now"
+            return False, "not an RSS feed (site may block this IP or the address changed)"
         newest = max(i["published"] for i in items)
         age = (datetime.now(timezone.utc) - newest).total_seconds() / 3600
         return True, f"{len(items)} items, newest {age:.0f}h ago | {items[0]['title'][:60]}"

@@ -7,7 +7,6 @@
 Bloomberg Markets | https://feeds.bloomberg.com/markets/news.rss
 Bloomberg Economics | https://feeds.bloomberg.com/economics/news.rss
 Bloomberg Politics | https://feeds.bloomberg.com/politics/news.rss
-Bloomberg Industries | https://feeds.bloomberg.com/industries/news.rss
 Reuters | https://news.google.com/rss/search?q=site:reuters.com+when:1d&hl=en-US&gl=US&ceid=US:en
 Financial Times | https://www.ft.com/world?format=rss
 Financial Times (Economy) | https://www.ft.com/global-economy?format=rss
@@ -16,7 +15,7 @@ Wall Street Journal (World) | https://feeds.a.dj.com/rss/RSSWorldNews.xml
 Wall Street Journal (Markets) | https://feeds.a.dj.com/rss/RSSMarketsMain.xml
 Wall Street Journal (Google News) | https://news.google.com/rss/search?q=site:wsj.com+when:1d&hl=en-US&gl=US&ceid=US:en
 Asharq | https://news.google.com/rss/search?q=site:asharq.com+when:1d&hl=ar&gl=SA&ceid=SA:ar
-Asharq Al-Awsat | https://aawsat.com/feed
+Asharq Al-Awsat (Google News) | https://news.google.com/rss/search?q=site:aawsat.com+when:1d&hl=ar&gl=SA&ceid=SA:ar
 Foreign Policy | https://foreignpolicy.com/feed/
 Al Jazeera | https://www.aljazeera.com/xml/rss/all.xml
 OilPrice.com | https://oilprice.com/rss/main
@@ -33,9 +32,8 @@ BBC Persian | https://feeds.bbci.co.uk/persian/rss.xml
 دنیای اقتصاد | https://donya-e-eqtesad.com/feeds/
 دنیای اقتصاد (Google News) | https://news.google.com/rss/search?q=site:donya-e-eqtesad.com+when:1d&hl=fa&gl=IR&ceid=IR:fa
 اکوایران | https://ecoiran.com/feeds/
-اکوایران (Google News) | https://news.google.com/rss/search?q=site:ecoiran.com+when:1d&hl=fa&gl=IR&ceid=IR:fa
-تسنیم | https://www.tasnimnews.com/fa/rss/feed/0/7/0/
-فارس | https://www.farsnews.ir/rss
+تسنیم (Google News) | https://news.google.com/rss/search?q=site:tasnimnews.com+when:1d&hl=fa&gl=IR&ceid=IR:fa
+فارس (Google News) | https://news.google.com/rss/search?q=site:farsnews.ir+when:1d&hl=fa&gl=IR&ceid=IR:fa
 شرق | https://www.sharghdaily.com/feeds/
 دانشجو | https://snn.ir/fa/rss/allnews
-خانه ملت | https://www.icana.ir/fa/rss/allnews
+خانه ملت (Google News) | https://news.google.com/rss/search?q=site:icana.ir+when:1d&hl=fa&gl=IR&ceid=IR:fa
