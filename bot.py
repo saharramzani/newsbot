@@ -74,11 +74,12 @@ def source_fa(item: dict) -> str:
     return re.sub(r"\s*\(.*?\)\s*$", "", name).strip()  # e.g. "دنیای اقتصاد (Google News)" -> "دنیای اقتصاد"
 
 
-def final_caption(pkg: dict, item: dict, limit: int = 1024) -> str:
+def final_caption(pkg: dict, item: dict, limit: int = 2200) -> str:
     """Caption + mandatory source line + hashtags. The caption body is shortened if needed, never the source."""
     src = source_fa(item)
     source_line = f"📌 منبع: {src}" if src else ""
-    tags = " ".join(pkg.get("hashtags", []))
+    tags = [t if t.startswith("#") else "#" + t for t in (str(x).strip().replace(" ", "_") for x in pkg.get("hashtags", [])) if t]
+    tags = " ".join(["#آوای_نفت"] + [t for t in tags if t != "#آوای_نفت"])
     tail = "\n\n".join(x for x in (source_line, tags) if x)
     body = pkg.get("caption", "").strip()
     room = limit - len(tail) - 2
@@ -88,16 +89,53 @@ def final_caption(pkg: dict, item: dict, limit: int = 1024) -> str:
 
 
 def format_package(pkg: dict, item: dict | None = None) -> str:
+    if "cover_options" not in pkg and "scenario" in pkg:  # package written before the new format
+        return _format_package_old(pkg, item)
+    opts = "\n".join(f"• گزینه {k}: {o.get('title', '')}" for k, o in enumerate(pkg.get("cover_options", []), 1))
+    broll = pkg.get("broll", {})
+    def kw(key):
+        return "\n".join(f"• {x}" for x in broll.get(key, [])) or "—"
+    words = len(pkg.get("narration", "").split())
+    flags = "\n".join(f"⚠️ {f}" for f in pkg.get("flags", [])) or "—"
+    return (f"🖼 تیترهای جذاب و ضربتی کاور\n{opts}\n\n"
+            f"📌 موضوع: {pkg.get('topic', '')}\n\n"
+            f"🔗 منبع و رفرنس: {pkg.get('references', '')}\n\n"
+            f"🎯 زاویه دید رسانه‌ای: {pkg.get('angle', '')}\n\n"
+            f"🪝 قلاب جذابیت (Hook): {pkg.get('hook', '')}\n\n"
+            f"🎞 کلیدواژه‌های تصویر (B-Roll)\n"
+            f"۱. فیلم‌های خبری اصل رویداد (Raw Footage)\n{kw('raw')}\n"
+            f"۲. فوتیج فضاساز میدانی (Location / Context)\n{kw('location')}\n"
+            f"۳. گرافیک و انیمیشن تحلیلی (3D / Maps / Explainer)\n{kw('graphics')}\n\n"
+            f"🎙 متن نریتور (Voice-Over)\nلحن: {pkg.get('narration_tone', '')}\n"
+            f"تعداد کلمات: {words} (حدود {words / 2.6:.0f} ثانیه)\n\n{pkg.get('narration', '')}\n\n"
+            f"📝 کپشن کامل اینستاگرام\n{final_caption(pkg, item or {})}\n\n"
+            f"موارد نیازمند بررسی شما:\n{flags}")
+
+
+def _format_package_old(pkg: dict, item: dict | None = None) -> str:
     scenes = "\n".join(f"• {s.get('time', '')} | {s.get('visual', '')} | «{s.get('text_on_screen', '')}»"
                        for s in pkg.get("scenario", []))
     flags = "\n".join(f"⚠️ {f}" for f in pkg.get("flags", [])) or "—"
-    tips = "\n".join(f"💡 {t}" for t in pkg.get("tips", [])) or "—"
-    return (f"🎬 *هوک*\n{pkg['hook']}\n\n🖼 *تیتر کاور*\n{cover_title(pkg)}\n\n🎙 *نریشن*\n{pkg['narration']}\n\n📝 *کپشن*\n{final_caption(pkg, item or {})}\n"
-            f"\n🎞 *سناریو*\n{scenes}\n\n*موارد نیازمند بررسی شما:*\n{flags}\n\n{tips}")
+    return (f"🎬 هوک\n{pkg.get('hook', '')}\n\n🖼 تیتر کاور\n{cover_title(pkg)}\n\n🎙 نریشن\n{pkg.get('narration', '')}"
+            f"\n\n📝 کپشن\n{final_caption(pkg, item or {})}\n\n🎞 سناریو\n{scenes}\n\nموارد نیازمند بررسی شما:\n{flags}")
+
+
+def cover_options(pkg: dict) -> list[str]:
+    """Cover headline options; each one newline-separated, one line per banner."""
+    out = []
+    for o in pkg.get("cover_options", []):
+        if isinstance(o, dict):
+            lines = [str(l).strip() for l in o.get("lines", []) if str(l).strip()]
+            out.append("\n".join(lines) if lines else str(o.get("title", "")).strip())
+        elif str(o).strip():
+            out.append(str(o).strip())
+    return [o for o in out if o]
 
 
 def cover_title(pkg: dict) -> str:
     """Cover headline; one line per banner (newline-separated)."""
+    if cover_options(pkg):
+        return cover_options(pkg)[0]
     lines = pkg.get("cover_lines")
     if isinstance(lines, list) and lines:
         return "\n".join(str(l).strip() for l in lines if str(l).strip())
@@ -209,8 +247,9 @@ async def build_and_send(update, ctx):
     with out.open("rb") as f:
         size = video.FORMATS[j.get("fmt", "9x16")]
         await ctx.bot.send_video(chat, f, supports_streaming=True, width=size["w"], height=size["h"],
-                                 caption=final_caption(j["pkg"], j["current"]))
+                                 caption=("🎬 " + cover_title(j["pkg"]).replace("\n", " "))[:1000])
     await ctx.bot.send_document(chat, out.open("rb"), filename="reel.mp4", caption="📥 فایل برای دانلود/ذخیره")
+    await ctx.bot.send_message(chat, final_caption(j["pkg"], j["current"]))  # full Instagram caption, ready to copy
     shutil.rmtree(work, ignore_errors=True)
     await make_cover(update, ctx)
     await next_in_queue(update, ctx)
@@ -234,10 +273,16 @@ async def make_cover(update, ctx):
         await ctx.bot.send_message(chat, f"⚠️ ساخت کاور شکست خورد (ویدئو سالم است):\n{e}")
         return
     covers = j.setdefault("covers", {})
-    covers[key] = {"bg": str(bg), "fmt": fmt, "title": cover_title(j["pkg"])}
+    covers[key] = {"bg": str(bg), "fmt": fmt, "title": cover_title(j["pkg"]), "options": cover_options(j["pkg"])}
     for old in sorted(covers)[:-10]:  # keep the last 10 covers editable
         Path(covers.pop(old)["bg"]).unlink(missing_ok=True)
     await send_cover(update, ctx, key)
+
+
+def cover_keyboard(c: dict, key: str) -> Markup:
+    opts = [Btn(f"گزینه {k + 1}", callback_data=f"covopt:{key}:{k}")
+            for k, o in enumerate(c.get("options", [])) if o != c["title"]]
+    return Markup(([opts] if opts else []) + [[Btn("✏️ نوشتن متن دلخواه", callback_data=f"cov:{key}")]])
 
 
 async def send_cover(update, ctx, key):
@@ -252,7 +297,7 @@ async def send_cover(update, ctx, key):
         return
     with out.open("rb") as f:
         await ctx.bot.send_photo(chat, f, caption="🖼 کاور: " + c["title"].replace("\n", " / "),
-                                 reply_markup=Markup([[Btn("✏️ تغییر متن کاور", callback_data=f"cov:{key}")]]))
+                                 reply_markup=cover_keyboard(c, key))
     with out.open("rb") as f:
         await ctx.bot.send_document(chat, f, filename="cover.jpg", caption="📥 کاور با کیفیت کامل")
     out.unlink(missing_ok=True)
@@ -275,6 +320,16 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     key = d.split(":")[0] if d.startswith("nar_ok") else d
     if (d.startswith(("sel:", "pg:")) and not j.get("items")) or (key in needs and needs[key] not in j):
         await q.message.reply_text("⏳ این دکمه منقضی شده (ربات ری‌استارت شده یا دور جدید شروع شده). دوباره /news بزنید.")
+        return
+    if d.startswith("covopt:"):
+        _, key, k = d.split(":")
+        c = j.get("covers", {}).get(key)
+        if not c or int(k) >= len(c.get("options", [])):
+            await q.message.reply_text("⏳ این کاور دیگر قابل ویرایش نیست.")
+            return
+        c["title"] = c["options"][int(k)]
+        await q.message.reply_text(f"🖼 در حال ساخت کاور با گزینه {int(k) + 1}…")
+        await send_cover(update, ctx, key)
         return
     if d.startswith("cov:"):
         key = d[4:]
