@@ -1,0 +1,15 @@
+[Unit]
+Description=newsbot Telegram bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=newsbot
+WorkingDirectory=/opt/newsbot
+ExecStart=/opt/newsbot/.venv/bin/python bot.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
