@@ -9,6 +9,7 @@ import shutil
 import time
 from pathlib import Path
 
+from telegram.error import BadRequest
 from telegram import InlineKeyboardButton as Btn, InlineKeyboardMarkup as Markup, Update
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes,
                           MessageHandler, PicklePersistence, filters)
@@ -158,10 +159,12 @@ async def build_and_send(update, ctx):
 # ---------- callbacks ----------
 async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    if q.from_user.id not in config.ALLOWED_USER_IDS:
+    try:
         await q.answer()
+    except BadRequest:  # button pressed while the bot was offline: Telegram no longer accepts the answer
+        pass
+    if q.from_user.id not in config.ALLOWED_USER_IDS:
         return
-    await q.answer()
     j, d = job(ctx), q.data
     # state is lost if the bot restarted, or the button belongs to an older round
     needs = {"go": "items", "pkg_redo": "current", "pkg_fb": "current", "pkg_ok": "pkg", "skip": "queue",
