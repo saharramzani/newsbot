@@ -171,3 +171,21 @@ def build_montage(media: list[dict], total: float, work: Path, fmt: str = "9x16"
     if r.returncode != 0:
         raise RuntimeError("ffmpeg concat failed:\n" + r.stderr[-800:])
     return out
+
+
+TELEGRAM_MAX_BYTES = 45_000_000  # bots may upload up to 50 MB; keep a margin
+
+
+def shrink(path: Path) -> Path:
+    """Re-encode in place with a size cap so Telegram accepts the upload."""
+    secs = duration(path)
+    kbps = int(TELEGRAM_MAX_BYTES * 8 / 1000 / max(secs, 1) * 0.9) - 160  # leave room for 160k audio
+    tmp = path.with_name(path.stem + "_small.mp4")
+    r = subprocess.run(["ffmpeg", "-y", "-i", str(path), "-c:v", "libx264", "-preset", "veryfast",
+                        "-b:v", f"{kbps}k", "-maxrate", f"{kbps}k", "-bufsize", f"{kbps * 2}k",
+                        "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", str(tmp)],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError("ffmpeg shrink failed:\n" + r.stderr[-800:])
+    tmp.replace(path)
+    return path

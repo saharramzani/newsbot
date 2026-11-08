@@ -249,15 +249,51 @@ async def build_and_send(update, ctx):
         log.exception("build failed")
         await ctx.bot.send_message(chat, f"❌ ساخت ویدئو شکست خورد:\n{e}")
         return
-    with out.open("rb") as f:
-        size = video.FORMATS[j.get("fmt", "9x16")]
-        await ctx.bot.send_video(chat, f, supports_streaming=True, width=size["w"], height=size["h"],
-                                 caption=("🎬 " + cover_title(j["pkg"]).replace("\n", " "))[:1000])
-    await ctx.bot.send_document(chat, out.open("rb"), filename="reel.mp4", caption="📥 فایل برای دانلود/ذخیره")
-    await ctx.bot.send_message(chat, final_caption(j["pkg"], j["current"]))  # full Instagram caption, ready to copy
+    # keep the result outside the work dir so a failed upload can be retried
+    OUTBOX.mkdir(parents=True, exist_ok=True)
+    key = f"{chat}_{int(time.time())}"
+    final = OUTBOX / f"{key}.mp4"
+    shutil.move(str(out), final)
     shutil.rmtree(work, ignore_errors=True)
+    if final.stat().st_size > video.TELEGRAM_MAX_BYTES:
+        await ctx.bot.send_message(chat, "🗜 ویدئو برای تلگرام بزرگ است؛ کمی فشرده می‌شود…")
+        await asyncio.to_thread(video.shrink, final)
+    j.setdefault("outbox", {})[key] = {"fmt": j.get("fmt", "9x16"),
+                                       "caption": ("🎬 " + cover_title(j["pkg"]).replace("\n", " "))[:1000]}
+    for old in sorted(j["outbox"])[:-5]:  # keep the last 5 videos for re-sending
+        j["outbox"].pop(old)
+        (OUTBOX / f"{old}.mp4").unlink(missing_ok=True)
+    await send_result(chat, ctx, key)
+    await ctx.bot.send_message(chat, final_caption(j["pkg"], j["current"]))  # full Instagram caption, ready to copy
     await make_cover(update, ctx)
     await next_in_queue(update, ctx)
+
+
+OUTBOX = config.WORK_DIR / "outbox"
+
+
+async def send_result(chat, ctx, key) -> bool:
+    """Upload the finished video once. On failure keep it and offer a resend button."""
+    item = job(ctx).get("outbox", {}).get(key)
+    path = OUTBOX / f"{key}.mp4"
+    if not item or not path.exists():
+        await ctx.bot.send_message(chat, "⏳ این ویدئو دیگر موجود نیست.")
+        return False
+    size = video.FORMATS[item["fmt"]]
+    mb = path.stat().st_size / 1_000_000
+    try:
+        with path.open("rb") as f:
+            await ctx.bot.send_video(chat, f, supports_streaming=True, width=size["w"], height=size["h"],
+                                     caption=f"{item['caption']}\n\n📥 فایل اصلی با کیفیت کامل ({mb:.1f}MB)",
+                                     filename="reel.mp4")
+        return True
+    except Exception as e:
+        log.exception("video upload failed")
+        await ctx.bot.send_message(
+            chat, f"⚠️ ویدئو ساخته شد ({mb:.1f}MB) ولی ارسالش به تلگرام شکست خورد:\n{e}\n\n"
+                  "ویدئو نگه داشته شده؛ دکمه‌ی زیر را بزنید تا دوباره فرستاده شود.",
+            reply_markup=Markup([[Btn("🔁 ارسال دوباره‌ی ویدئو", callback_data=f"resend:{key}")]]))
+        return False
 
 
 # ---------- cover ----------
@@ -325,6 +361,11 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     key = d.split(":")[0] if d.startswith("nar_ok") else d
     if (d.startswith(("sel:", "pg:")) and not j.get("items")) or (key in needs and needs[key] not in j):
         await q.message.reply_text("⏳ این دکمه منقضی شده (ربات ری‌استارت شده یا دور جدید شروع شده). دوباره /news بزنید.")
+        return
+    if d.startswith("resend:"):
+        await q.edit_message_reply_markup(None)
+        await q.message.reply_text("📤 در حال ارسال دوباره…")
+        await send_result(update.effective_chat.id, ctx, d[7:])
         return
     if d.startswith("covopt:"):
         _, key, k = d.split(":")
@@ -559,7 +600,9 @@ def main():
     else:
         log.info("ffmpeg found: %s", shutil.which("ffmpeg"))
     # rate_limiter: when Telegram says "flood control, retry in N s", wait and resend instead of failing
+    # generous timeouts: uploading a finished video from a home connection can take minutes
     app = (Application.builder().token(config.TELEGRAM_BOT_TOKEN).concurrent_updates(True)
+           .connect_timeout(30).read_timeout(60).write_timeout(60).pool_timeout(30).media_write_timeout(600)
            .rate_limiter(AIORateLimiter(max_retries=5))
            .persistence(PicklePersistence(filepath=config.WORK_DIR / "state.pickle")).build())
     allowed = filters.User(user_id=list(config.ALLOWED_USER_IDS))
