@@ -17,7 +17,7 @@ from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, Con
 import config
 from agents.scout import find_news
 from agents.writer import write_package
-from services import download, stt, tts, video
+from services import cover, download, stt, tts, video
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 # httpx logs full URLs at INFO level, and Telegram URLs contain the bot token
@@ -53,8 +53,12 @@ def format_package(pkg: dict) -> str:
                        for s in pkg.get("scenario", []))
     flags = "\n".join(f"⚠️ {f}" for f in pkg.get("flags", [])) or "—"
     tips = "\n".join(f"💡 {t}" for t in pkg.get("tips", [])) or "—"
-    return (f"🎬 *هوک*\n{pkg['hook']}\n\n🎙 *نریشن*\n{pkg['narration']}\n\n📝 *کپشن*\n{pkg['caption']}\n"
+    return (f"🎬 *هوک*\n{pkg['hook']}\n\n🖼 *تیتر کاور*\n{cover_title(pkg)}\n\n🎙 *نریشن*\n{pkg['narration']}\n\n📝 *کپشن*\n{pkg['caption']}\n"
             f"{' '.join(pkg.get('hashtags', []))}\n\n🎞 *سناریو*\n{scenes}\n\n*موارد نیازمند بررسی شما:*\n{flags}\n\n{tips}")
+
+
+def cover_title(pkg: dict) -> str:
+    return (pkg.get("cover_title") or pkg.get("hook", "").split("\n")[0]).strip()
 
 
 async def say(update_or_q, ctx, text, markup=None):
@@ -155,7 +159,51 @@ async def build_and_send(update, ctx):
                                  caption=(j["pkg"]["caption"] + "\n" + " ".join(j["pkg"].get("hashtags", [])))[:1000])
     await ctx.bot.send_document(chat, out.open("rb"), filename="reel.mp4", caption="📥 فایل برای دانلود/ذخیره")
     shutil.rmtree(work, ignore_errors=True)
+    await make_cover(update, ctx)
     await next_in_queue(update, ctx)
+
+
+# ---------- cover ----------
+COVER_DIR = config.WORK_DIR / "covers"
+
+
+async def make_cover(update, ctx):
+    """Build the cover for the video just sent. Failure here never blocks the next item."""
+    j, chat = job(ctx), update.effective_chat.id
+    fmt = j.get("fmt", "9x16")
+    key = str(int(time.time() * 1000))
+    COVER_DIR.mkdir(parents=True, exist_ok=True)
+    bg = COVER_DIR / f"{chat}_{key}_bg.png"
+    try:
+        await asyncio.to_thread(cover.extract_frame, Path(j["src"]), bg, fmt)
+    except Exception as e:
+        log.exception("cover frame failed")
+        await ctx.bot.send_message(chat, f"⚠️ ساخت کاور شکست خورد (ویدئو سالم است):\n{e}")
+        return
+    covers = j.setdefault("covers", {})
+    covers[key] = {"bg": str(bg), "fmt": fmt, "title": cover_title(j["pkg"])}
+    for old in sorted(covers)[:-10]:  # keep the last 10 covers editable
+        Path(covers.pop(old)["bg"]).unlink(missing_ok=True)
+    await send_cover(update, ctx, key)
+
+
+async def send_cover(update, ctx, key):
+    j, chat = job(ctx), update.effective_chat.id
+    c = j["covers"][key]
+    out = COVER_DIR / f"{chat}_{key}.jpg"
+    try:
+        await asyncio.to_thread(cover.compose, Path(c["bg"]), c["title"], out, c["fmt"])
+    except Exception as e:
+        log.exception("cover compose failed")
+        await ctx.bot.send_message(chat, f"⚠️ ساخت کاور شکست خورد (ویدئو سالم است):\n{e}")
+        return
+    with out.open("rb") as f:
+        await ctx.bot.send_photo(chat, f, caption=f"🖼 کاور: {c['title']}",
+                                 reply_markup=Markup([[Btn("✏️ تغییر متن کاور", callback_data=f"cov:{key}")]]))
+    with out.open("rb") as f:
+        await ctx.bot.send_document(chat, f, filename="cover.jpg", caption="📥 کاور با کیفیت کامل")
+    out.unlink(missing_ok=True)
+    out.with_suffix(".ass").unlink(missing_ok=True)
 
 
 # ---------- callbacks ----------
@@ -174,6 +222,15 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     key = d.split(":")[0] if d.startswith("nar_ok") else d
     if (d.startswith("sel:") and not j.get("items")) or (key in needs and needs[key] not in j):
         await q.message.reply_text("⏳ این دکمه منقضی شده (ربات ری‌استارت شده یا دور جدید شروع شده). دوباره /news بزنید.")
+        return
+    if d.startswith("cov:"):
+        key = d[4:]
+        if key not in j.get("covers", {}):
+            await q.message.reply_text("⏳ این کاور دیگر قابل ویرایش نیست.")
+            return
+        j["cover_edit"], j["stage_before_cover"] = key, j.get("stage")
+        j["stage"] = "cover_text"
+        await q.message.reply_text(f"متن جدید کاور را بفرستید:\n(متن فعلی: {j['covers'][key]['title']})")
         return
     if d == "cancel":
         ctx.user_data.pop("job", None)
@@ -215,6 +272,14 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     stage = j.get("stage")
     if stage == "downloading":
         await update.message.reply_text("⏳ هنوز در حال دانلود ویدئوی قبلی هستم؛ صبر کنید.")
+        return
+    if stage == "cover_text":
+        key = j.pop("cover_edit", None)
+        j["stage"] = j.pop("stage_before_cover", None)  # go back to whatever step the user was on
+        if key in j.get("covers", {}):
+            j["covers"][key]["title"] = text.strip()
+            await update.message.reply_text("🖼 در حال ساخت کاور جدید…")
+            await send_cover(update, ctx, key)
         return
     if stage == "feedback":
         j["stage"] = None
