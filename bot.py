@@ -124,17 +124,18 @@ async def ask_narration_approval(update, ctx):
     await ctx.bot.send_message(
         update.effective_chat.id,
         "🎙 متن نهایی نریشن (این متن به ElevenLabs داده می‌شود):\n\n" + j["narration"],
-        reply_markup=Markup([[Btn("✅ تایید و ساخت ویدئو", callback_data="nar_ok"),
-                              Btn("✏️ ویرایش متن", callback_data="nar_edit")]]))
+        reply_markup=Markup([[Btn("✅ ساخت " + f["label"], callback_data=f"nar_ok:{k}") for k, f in video.FORMATS.items()],
+                             [Btn("✏️ ویرایش متن", callback_data="nar_edit")]]))
 
 
 def _run_build(j, work: Path) -> Path:
     work.mkdir(parents=True, exist_ok=True)
     audio = tts.synthesize(j["narration"], work / "narration.mp3")
     words = stt.align_to_script(j["narration"], stt.transcribe_words(audio))
-    ass = video.build_ass(words, work / "subs.ass")
+    fmt = j.get("fmt", "9x16")
+    ass = video.build_ass(words, work / "subs.ass", fmt=fmt)
     logo = Path(config.LOGO_PATH)
-    return video.build_video(Path(j["src"]), audio, ass, work / "final.mp4", logo if logo.exists() else None)
+    return video.build_video(Path(j["src"]), audio, ass, work / "final.mp4", logo if logo.exists() else None, fmt=fmt)
 
 
 async def build_and_send(update, ctx):
@@ -149,7 +150,8 @@ async def build_and_send(update, ctx):
         await ctx.bot.send_message(chat, f"❌ ساخت ویدئو شکست خورد:\n{e}")
         return
     with out.open("rb") as f:
-        await ctx.bot.send_video(chat, f, supports_streaming=True, width=1080, height=1920,
+        size = video.FORMATS[j.get("fmt", "9x16")]
+        await ctx.bot.send_video(chat, f, supports_streaming=True, width=size["w"], height=size["h"],
                                  caption=(j["pkg"]["caption"] + "\n" + " ".join(j["pkg"].get("hashtags", [])))[:1000])
     await ctx.bot.send_document(chat, out.open("rb"), filename="reel.mp4", caption="📥 فایل برای دانلود/ذخیره")
     shutil.rmtree(work, ignore_errors=True)
@@ -169,7 +171,8 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # state is lost if the bot restarted, or the button belongs to an older round
     needs = {"go": "items", "pkg_redo": "current", "pkg_fb": "current", "pkg_ok": "pkg", "skip": "queue",
              "nar_edit": "pkg", "nar_ok": "src"}
-    if (d.startswith("sel:") and not j.get("items")) or (d in needs and needs[d] not in j):
+    key = d.split(":")[0] if d.startswith("nar_ok") else d
+    if (d.startswith("sel:") and not j.get("items")) or (key in needs and needs[key] not in j):
         await q.message.reply_text("⏳ این دکمه منقضی شده (ربات ری‌استارت شده یا دور جدید شروع شده). دوباره /news بزنید.")
         return
     if d == "cancel":
@@ -199,7 +202,10 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif d == "nar_edit":
         j["stage"] = "narration_edit"
         await q.message.reply_text("متن جدید نریشن را بفرستید:")
-    elif d == "nar_ok":
+    elif d.startswith("nar_ok"):
+        fmt = d.split(":", 1)[1] if ":" in d else "9x16"  # old buttons had no format
+        j["fmt"] = fmt if fmt in video.FORMATS else "9x16"
+        await q.edit_message_reply_markup(None)  # no double build from a second press
         await build_and_send(update, ctx)
 
 
