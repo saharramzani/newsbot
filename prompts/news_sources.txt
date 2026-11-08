@@ -1,0 +1,16 @@
+# سایت‌های خبری (فید RSS) — هر خط: نام | آدرس فید
+# خطی که با # شروع شود غیرفعال است. بعد از تغییر، ربات را دوباره روشن کنید.
+# فیدهایی که باز نشوند در پیام ربات زیر «فیدهای ناموفق» نشان داده می‌شوند.
+
+Bloomberg Markets | https://feeds.bloomberg.com/markets/news.rss
+Bloomberg Economics | https://feeds.bloomberg.com/economics/news.rss
+Bloomberg Politics | https://feeds.bloomberg.com/politics/news.rss
+Bloomberg Industries | https://feeds.bloomberg.com/industries/news.rss
+
+BBC Middle East | https://feeds.bbci.co.uk/news/world/middle_east/rss.xml
+BBC Persian | https://feeds.bbci.co.uk/persian/rss.xml
+BBC Business | https://feeds.bbci.co.uk/news/business/rss.xml
+Al Jazeera | https://www.aljazeera.com/xml/rss/all.xml
+The Guardian (Iran) | https://www.theguardian.com/world/iran/rss
+New York Times (Middle East) | https://rss.nytimes.com/services/xml/rss/nyt/MiddleEast.xml
+OilPrice.com | https://oilprice.com/rss/main
