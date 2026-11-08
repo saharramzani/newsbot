@@ -58,6 +58,10 @@ def format_package(pkg: dict) -> str:
 
 
 def cover_title(pkg: dict) -> str:
+    """Cover headline; one line per banner (newline-separated)."""
+    lines = pkg.get("cover_lines")
+    if isinstance(lines, list) and lines:
+        return "\n".join(str(l).strip() for l in lines if str(l).strip())
     return (pkg.get("cover_title") or pkg.get("hook", "").split("\n")[0]).strip()
 
 
@@ -198,7 +202,7 @@ async def send_cover(update, ctx, key):
         await ctx.bot.send_message(chat, f"⚠️ ساخت کاور شکست خورد (ویدئو سالم است):\n{e}")
         return
     with out.open("rb") as f:
-        await ctx.bot.send_photo(chat, f, caption=f"🖼 کاور: {c['title']}",
+        await ctx.bot.send_photo(chat, f, caption="🖼 کاور: " + c["title"].replace("\n", " / "),
                                  reply_markup=Markup([[Btn("✏️ تغییر متن کاور", callback_data=f"cov:{key}")]]))
     with out.open("rb") as f:
         await ctx.bot.send_document(chat, f, filename="cover.jpg", caption="📥 کاور با کیفیت کامل")
@@ -230,7 +234,8 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return
         j["cover_edit"], j["stage_before_cover"] = key, j.get("stage")
         j["stage"] = "cover_text"
-        await q.message.reply_text(f"متن جدید کاور را بفرستید:\n(متن فعلی: {j['covers'][key]['title']})")
+        await q.message.reply_text("متن جدید کاور را بفرستید؛ هر خط یک نوار جدا می‌شود (حداکثر ۳ خط). متن فعلی:\n\n"
+                                   + j["covers"][key]["title"])
         return
     if d == "cancel":
         ctx.user_data.pop("job", None)
