@@ -1,16 +1,41 @@
 # سایت‌های خبری (فید RSS) — هر خط: نام | آدرس فید
 # خطی که با # شروع شود غیرفعال است. بعد از تغییر، ربات را دوباره روشن کنید.
-# فیدهایی که باز نشوند در پیام ربات زیر «فیدهای ناموفق» نشان داده می‌شوند.
+# برای امتحان همه‌ی فیدها:  .venv\Scripts\python tools\check_sources.py
+# «Google News» یعنی تیترهای همان سایت از طریق گوگل‌نیوز (برای سایت‌هایی که فید عمومی ندارند یا IP خارجی را می‌بندند).
 
+# --- خارجی ---
 Bloomberg Markets | https://feeds.bloomberg.com/markets/news.rss
 Bloomberg Economics | https://feeds.bloomberg.com/economics/news.rss
 Bloomberg Politics | https://feeds.bloomberg.com/politics/news.rss
 Bloomberg Industries | https://feeds.bloomberg.com/industries/news.rss
-
-BBC Middle East | https://feeds.bbci.co.uk/news/world/middle_east/rss.xml
-BBC Persian | https://feeds.bbci.co.uk/persian/rss.xml
-BBC Business | https://feeds.bbci.co.uk/news/business/rss.xml
+Reuters | https://news.google.com/rss/search?q=site:reuters.com+when:1d&hl=en-US&gl=US&ceid=US:en
+Financial Times | https://www.ft.com/world?format=rss
+Financial Times (Economy) | https://www.ft.com/global-economy?format=rss
+Financial Times (Commodities) | https://www.ft.com/commodities?format=rss
+Wall Street Journal (World) | https://feeds.a.dj.com/rss/RSSWorldNews.xml
+Wall Street Journal (Markets) | https://feeds.a.dj.com/rss/RSSMarketsMain.xml
+Wall Street Journal (Google News) | https://news.google.com/rss/search?q=site:wsj.com+when:1d&hl=en-US&gl=US&ceid=US:en
+Asharq | https://news.google.com/rss/search?q=site:asharq.com+when:1d&hl=ar&gl=SA&ceid=SA:ar
+Asharq Al-Awsat | https://aawsat.com/feed
+Foreign Policy | https://foreignpolicy.com/feed/
 Al Jazeera | https://www.aljazeera.com/xml/rss/all.xml
-The Guardian (Iran) | https://www.theguardian.com/world/iran/rss
-New York Times (Middle East) | https://rss.nytimes.com/services/xml/rss/nyt/MiddleEast.xml
 OilPrice.com | https://oilprice.com/rss/main
+The Guardian (Middle East) | https://www.theguardian.com/world/middleeast/rss
+The Guardian (Iran) | https://www.theguardian.com/world/iran/rss
+The Guardian (Oil) | https://www.theguardian.com/business/oil/rss
+The Guardian (Economics) | https://www.theguardian.com/business/economics/rss
+BBC Middle East | https://feeds.bbci.co.uk/news/world/middle_east/rss.xml
+BBC Business | https://feeds.bbci.co.uk/news/business/rss.xml
+BBC Persian | https://feeds.bbci.co.uk/persian/rss.xml
+
+# --- ایرانی ---
+شانا | https://www.shana.ir/rss
+دنیای اقتصاد | https://donya-e-eqtesad.com/feeds/
+دنیای اقتصاد (Google News) | https://news.google.com/rss/search?q=site:donya-e-eqtesad.com+when:1d&hl=fa&gl=IR&ceid=IR:fa
+اکوایران | https://ecoiran.com/feeds/
+اکوایران (Google News) | https://news.google.com/rss/search?q=site:ecoiran.com+when:1d&hl=fa&gl=IR&ceid=IR:fa
+تسنیم | https://www.tasnimnews.com/fa/rss/feed/0/7/0/
+فارس | https://www.farsnews.ir/rss
+شرق | https://www.sharghdaily.com/feeds/
+دانشجو | https://snn.ir/fa/rss/allnews
+خانه ملت | https://www.icana.ir/fa/rss/allnews

@@ -16,6 +16,7 @@ import httpx
 import config
 from services import llm
 
+PER_SOURCE, MAX_ITEMS = 8, 200  # newest items per source, total sent to the LLM
 SOURCES_FILE = Path(__file__).parent.parent / "prompts" / "news_sources.txt"
 
 
@@ -64,18 +65,56 @@ def _clean(s: str) -> str:
     return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", s))).strip()
 
 
-def _parse(name: str, xml_bytes: bytes) -> list[dict]:
-    root = ET.fromstring(xml_bytes)
-    out = []
-    for it in root.iter("item"):
+def _local(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def _child(el, *names) -> str:
+    """Text of the first non-empty child whose local tag name is in names (works with XML namespaces)."""
+    for n in names:
+        for ch in el:
+            if _local(ch.tag) == n and (ch.text or "").strip():
+                return ch.text.strip()
+    return ""
+
+
+def _date(s: str):
+    if not s:
+        return None
+    try:
+        d = parsedate_to_datetime(s)
+    except Exception:
         try:
-            published = parsedate_to_datetime(_text(it, "pubDate"))
-            if published.tzinfo is None:
-                published = published.replace(tzinfo=timezone.utc)
+            d = datetime.fromisoformat(s.replace("Z", "+00:00"))
         except Exception:
+            return None
+    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+
+
+def _parse(name: str, xml_bytes: bytes) -> list[dict]:
+    """RSS <item> and Atom <entry> feeds."""
+    root = ET.fromstring(xml_bytes)
+    google_news = False
+    out = []
+    for it in root.iter():
+        kind = _local(it.tag)
+        if kind not in ("item", "entry"):
             continue
-        out.append({"source": name, "title": _clean(_text(it, "title")), "url": _text(it, "link"),
-                    "snippet": _clean(_text(it, "description"))[:400], "published": published})
+        published = _date(_child(it, "pubDate", "published", "updated", "date"))
+        if not published:
+            continue
+        link = _child(it, "link")
+        if not link:  # Atom: <link href="..."/>
+            for ch in it:
+                if _local(ch.tag) == "link" and ch.get("href"):
+                    link = ch.get("href")
+                    break
+        title = _clean(_child(it, "title"))
+        google_news = google_news or "news.google.com" in link
+        if google_news:  # Google News titles end with " - Publisher"
+            title = re.sub(r"\s+-\s+[^-]{2,40}$", "", title)
+        out.append({"source": name, "title": title, "url": link,
+                    "snippet": _clean(_child(it, "description", "summary", "content"))[:400], "published": published})
     return out
 
 
@@ -113,7 +152,13 @@ async def find_news(hours: int | None = None, n: int = 8) -> tuple[list[dict], l
         window = 24
         recent = [i for i in items if now - i["published"] <= timedelta(hours=window)]
     recent.sort(key=lambda i: i["published"], reverse=True)
-    recent = recent[:80]
+    # fairness: high-volume agencies must not crowd out the others
+    per_source, picked = {}, []
+    for i in recent:
+        if per_source.get(i["source"], 0) < PER_SOURCE:
+            per_source[i["source"]] = per_source.get(i["source"], 0) + 1
+            picked.append(i)
+    recent = picked[:MAX_ITEMS]
     if not recent:
         raise RuntimeError("هیچ خبری از فیدها دریافت نشد. فیدهای ناموفق: " + ", ".join(errors or ["—"]))
 
