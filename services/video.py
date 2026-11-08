@@ -104,3 +104,70 @@ def build_video(src: Path, narration: Path, ass: Path, out: Path, logo: Path | N
     if r.returncode != 0:
         raise RuntimeError("ffmpeg failed:\n" + r.stderr[-1200:])
     return out
+
+
+# ---------- montage: several videos / photos -> one background clip ----------
+PHOTO_MIN, PHOTO_MAX = 2.5, 6.0  # seconds a photo stays on screen
+
+
+def plan_durations(media: list[dict], total: float) -> list[float]:
+    """Share `total` seconds fairly between the items, in order.
+
+    Photos get an equal share (clamped); a video never gets more than its own length, and what a short
+    video cannot use goes to the longer ones. If everything together is still shorter, the montage loops.
+    """
+    n = len(media)
+    share = total / n
+    durs = [0.0] * n
+    for k, m in enumerate(media):
+        durs[k] = min(max(share, PHOTO_MIN), PHOTO_MAX) if m["kind"] == "photo" else min(share, m["dur"])
+    for _ in range(5):  # hand leftover time to videos that have more footage
+        left = total - sum(durs)
+        room = [k for k, m in enumerate(media) if m["kind"] == "video" and m["dur"] - durs[k] > 0.1]
+        if left <= 0.1 or not room:
+            break
+        for k in room:
+            durs[k] = min(media[k]["dur"], durs[k] + left / len(room))
+    photos = [k for k, m in enumerate(media) if m["kind"] == "photo"]
+    left = total - sum(durs)
+    if left > 0.1 and photos:  # still short: let photos stay longer (up to 10 s) before the montage loops
+        for k in photos:
+            durs[k] = min(10.0, durs[k] + left / len(photos))
+    return [max(d, 0.5) for d in durs]
+
+
+def _segment(m: dict, dur: float, out: Path, w: int, h: int):
+    enc = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-an", str(out)]
+    if m["kind"] == "photo":
+        frames = int(dur * 30)
+        # slow Ken Burns zoom so photos do not look frozen
+        vf = (f"scale={w * 2}:{h * 2}:force_original_aspect_ratio=increase,crop={w * 2}:{h * 2},"
+              f"zoompan=z='min(zoom+0.0008,1.12)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+              f":d={frames}:s={w}x{h}:fps=30,setsar=1")
+        cmd = ["ffmpeg", "-y", "-i", m["path"], "-vf", vf, "-frames:v", str(frames)] + enc
+    else:
+        start = max(0.0, min(1.0, m["dur"] - dur))  # skip the first second (often a logo/black) when possible
+        vf = f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},setsar=1,fps=30"
+        cmd = ["ffmpeg", "-y", "-ss", f"{start:.2f}", "-t", f"{dur:.2f}", "-i", m["path"], "-vf", vf] + enc
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"ffmpeg failed on {Path(m['path']).name}:\n" + r.stderr[-800:])
+
+
+def build_montage(media: list[dict], total: float, work: Path, fmt: str = "9x16") -> Path:
+    """media: [{'path', 'kind': 'video'|'photo', 'dur'}] in the order the user sent them."""
+    f = FORMATS[fmt]
+    work.mkdir(parents=True, exist_ok=True)
+    parts = []
+    for k, (m, d) in enumerate(zip(media, plan_durations(media, total))):
+        seg = work / f"seg_{k:02d}.mp4"
+        _segment(m, d, seg, f["w"], f["h"])
+        parts.append(seg)
+    listing = work / "segments.txt"
+    listing.write_text("".join(f"file '{p.resolve().as_posix()}'\n" for p in parts), encoding="utf-8")
+    out = work / "montage.mp4"
+    r = subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(listing), "-c", "copy", str(out)],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError("ffmpeg concat failed:\n" + r.stderr[-800:])
+    return out

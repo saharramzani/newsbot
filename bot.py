@@ -229,8 +229,13 @@ def _run_build(j, work: Path) -> Path:
     words = stt.align_to_script(j["narration"], stt.transcribe_words(audio))
     fmt = j.get("fmt", "9x16")
     ass = video.build_ass(words, work / "subs.ass", fmt=fmt)
+    media = [m for m in j.get("media", []) if m.get("path")]
+    if len(media) > 1 or (media and media[0]["kind"] == "photo"):
+        src = video.build_montage(media, video.duration(audio) + 0.5, work / "montage", fmt)
+    else:
+        src = Path(j["src"])
     logo = Path(config.LOGO_PATH)
-    return video.build_video(Path(j["src"]), audio, ass, work / "final.mp4", logo if logo.exists() else None, fmt=fmt)
+    return video.build_video(src, audio, ass, work / "final.mp4", logo if logo.exists() else None, fmt=fmt)
 
 
 async def build_and_send(update, ctx):
@@ -368,8 +373,37 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif d == "skip":
         await next_in_queue(update, ctx)
     elif d == "pkg_ok":
-        j["stage"] = "link"
-        await q.message.reply_text("🔗 لینک ویدئوی منبع را بفرستید (یا خود فایل ویدئو را آپلود کنید؛ سقف دانلود ربات ~۲۰MB).")
+        j["stage"], j["media"], j["pending"] = "link", [], 0
+        download.fresh_dir(media_root(update))
+        await q.message.reply_text(
+            "🎞 ویدئوها و عکس‌های این خبر را بفرستید؛ هر تعداد که خواستید، به همان ترتیبی که باید پخش شوند:\n"
+            "• لینک ویدئو (چند لینک در یک پیام هم می‌شود)\n• فایل ویدئو یا عکس (سقف هر فایل ~۲۰MB)\n\n"
+            "هر وقت تمام شد، دکمه‌ی «✅ تمام شد» را بزنید.")
+    elif d == "media_done":
+        if j.get("stage") != "link":
+            return
+        if j.get("pending"):
+            await q.answer(f"صبر کنید؛ {j['pending']} مورد هنوز در حال دانلود است.", show_alert=True)
+            return
+        media = [m for m in j.get("media", []) if m.get("path")]
+        if not media:
+            await q.answer("هنوز هیچ ویدئو یا عکسی نفرستاده‌اید.", show_alert=True)
+            return
+        j["media"], j["stage"] = media, None
+        cover_src = next((m for m in media if m["kind"] == "video"), media[0])  # cover prefers real footage
+        j["src"] = cover_src["path"]
+        await q.edit_message_reply_markup(None)
+        await q.message.reply_text(f"✅ {len(media)} مورد دریافت شد: {media_summary(media)}")
+        await ask_narration_approval(update, ctx)
+    elif d == "media_undo":
+        done = [m for m in j.get("media", []) if m.get("path")]
+        if done:
+            j["media"].remove(done[-1])
+        await q.message.reply_text(f"↩️ آخرین مورد حذف شد. الان: {media_summary(j.get('media', []))}",
+                                   reply_markup=media_keyboard())
+    elif d == "media_reset":
+        j["media"] = [m for m in j.get("media", []) if not m.get("path")]  # keep only in-flight downloads
+        await q.message.reply_text("🗑 همه حذف شد؛ از اول بفرستید.", reply_markup=media_keyboard())
     elif d == "nar_edit":
         j["stage"] = "narration_edit"
         await q.message.reply_text("متن جدید نریشن را بفرستید:")
@@ -399,22 +433,12 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         j["stage"] = None
         await write_and_show(update, ctx, text)
     elif stage == "link":
-        m = URL_RE.search(text)
-        if not m:
-            await update.message.reply_text("لینک معتبر نیست.")
+        urls = URL_RE.findall(text)
+        if not urls:
+            await update.message.reply_text("لینک معتبر نیست. لینک یا فایل بفرستید، یا «✅ تمام شد» را بزنید.",
+                                            reply_markup=media_keyboard())
             return
-        j["stage"] = "downloading"
-        await update.message.reply_text("⬇️ در حال دانلود… (تا تمام نشود مرحله‌ی بعد شروع نمی‌شود)")
-        try:
-            src = await asyncio.to_thread(download.download_video, m.group(0), config.WORK_DIR / f"dl_{update.effective_chat.id}")
-        except Exception as e:
-            log.exception("download failed")
-            j["stage"] = "link"
-            await update.message.reply_text(f"❌ دانلود نشد:\n{e}\n\nلینک دیگری بفرستید یا خود فایل را آپلود کنید.")
-            return
-        j["src"], j["stage"] = str(src), None
-        await report_source(update, src)
-        await ask_narration_approval(update, ctx)
+        await asyncio.gather(*(add_link(update, ctx, u) for u in urls))
     elif stage == "narration_edit":
         j["pkg"]["narration"] = text
         j["stage"] = None
@@ -423,32 +447,81 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("برای شروع /news")
 
 
-async def on_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+def media_root(update) -> Path:
+    return config.WORK_DIR / f"dl_{update.effective_chat.id}"
+
+
+def media_keyboard() -> Markup:
+    return Markup([[Btn("✅ تمام شد", callback_data="media_done")],
+                   [Btn("↩️ حذف آخری", callback_data="media_undo"), Btn("🗑 از اول", callback_data="media_reset")]])
+
+
+def media_summary(media: list[dict]) -> str:
+    done = [m for m in media if m.get("path")]
+    vids = [m for m in done if m["kind"] == "video"]
+    photos = len(done) - len(vids)
+    parts = []
+    if vids:
+        parts.append(f"{len(vids)} ویدئو ({sum(m['dur'] for m in vids):.0f} ثانیه)")
+    if photos:
+        parts.append(f"{photos} عکس")
+    return "، ".join(parts) or "هیچ"
+
+
+async def _collect(update, ctx, label: str, fetch):
+    """Reserve a slot (keeps the order the user sent things), fetch the file, then report."""
+    j = job(ctx)
+    slot = {"path": None, "id": time.time_ns()}  # unique id: placeholders must never compare equal
+    j.setdefault("media", []).append(slot)
+    j["pending"] = j.get("pending", 0) + 1
+    try:
+        d = download.fresh_dir(media_root(update) / str(time.time_ns()))
+        path, kind = await fetch(d)
+        dur = await asyncio.to_thread(download.check_video, path) if kind == "video" else 0.0
+        slot.update(path=str(path), kind=kind, dur=dur)
+    except Exception as e:
+        log.exception("media fetch failed")
+        if slot in j.get("media", []):
+            j["media"].remove(slot)
+        await update.message.reply_text(f"❌ {label} دریافت نشد:\n{e}\n\nمی‌توانید دوباره بفرستید.")
+        return
+    finally:
+        j["pending"] = max(0, j.get("pending", 1) - 1)
+    if slot not in j.get("media", []):  # user pressed «از اول» meanwhile
+        return
+    n = sum(1 for m in j["media"] if m.get("path"))
+    what = f"ویدئو، {dur:.0f} ثانیه" if kind == "video" else "عکس"
+    await update.message.reply_text(f"✅ مورد {n} اضافه شد ({what}). جمع: {media_summary(j['media'])}\n"
+                                    "بعدی را بفرستید یا «✅ تمام شد» را بزنید.", reply_markup=media_keyboard())
+
+
+async def add_link(update, ctx, url: str):
+    async def fetch(d):
+        return await asyncio.to_thread(download.download_video, url, d), "video"
+    await update.message.reply_text(f"⬇️ در حال دانلود…\n{url[:80]}")
+    await _collect(update, ctx, "ویدئوی این لینک", fetch)
+
+
+async def on_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     j = job(ctx)
     if j.get("stage") != "link":
         return
-    att = update.message.video or update.message.document
-    j["stage"] = "downloading"
-    await update.message.reply_text("⬇️ در حال دریافت فایل…")
-    try:
-        path = download.fresh_dir(config.WORK_DIR / f"dl_{update.effective_chat.id}") / "source.mp4"
+    msg = update.message
+    if msg.photo:
+        att, kind, name = msg.photo[-1], "photo", "photo.jpg"  # largest size
+    elif msg.video or msg.animation:
+        att, kind, name = msg.video or msg.animation, "video", "source.mp4"
+    elif msg.document and (msg.document.mime_type or "").startswith("image/"):
+        att, kind, name = msg.document, "photo", "photo" + (Path(msg.document.file_name or "").suffix or ".jpg")
+    else:
+        att, kind, name = msg.document, "video", "source" + (Path(msg.document.file_name or "").suffix or ".mp4")
+
+    async def fetch(d):
+        path = d / name
         f = await att.get_file()
         await f.download_to_drive(path)
-        await asyncio.to_thread(download.check_video, path)
-    except Exception as e:
-        log.exception("upload failed")
-        j["stage"] = "link"
-        await update.message.reply_text(f"❌ فایل دریافت نشد:\n{e}\n\n(سقف فایل برای ربات ~۲۰MB است؛ فایل بزرگ‌تر را با لینک بفرستید.)")
-        return
-    j["src"], j["stage"] = str(path), None
-    await report_source(update, path)
-    await ask_narration_approval(update, ctx)
-
-
-async def report_source(update, path: Path):
-    secs = await asyncio.to_thread(video.duration, path)
-    mb = path.stat().st_size / 1_000_000
-    await update.message.reply_text(f"✅ ویدئو کامل دریافت شد: {mb:.1f}MB، {secs:.0f} ثانیه")
+        return path, kind
+    await _collect(update, ctx, "فایل (سقف ~۲۰MB؛ فایل بزرگ‌تر را با لینک بفرستید)", fetch)
 
 
 async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE):
@@ -478,7 +551,8 @@ def main():
     app.add_handler(CommandHandler("start", cmd_start, filters=allowed))
     app.add_handler(CommandHandler("news", cmd_news, filters=allowed))
     app.add_handler(CommandHandler("cancel", cmd_cancel, filters=allowed))
-    app.add_handler(MessageHandler(allowed & (filters.VIDEO | filters.Document.VIDEO), on_video))
+    app.add_handler(MessageHandler(allowed & (filters.VIDEO | filters.ANIMATION | filters.PHOTO | filters.Document.VIDEO
+                                              | filters.Document.IMAGE), on_media))
     app.add_handler(MessageHandler(allowed & filters.TEXT & ~filters.COMMAND, on_text))
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_error_handler(on_error)
