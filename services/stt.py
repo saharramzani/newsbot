@@ -1,5 +1,6 @@
 """Whisper (faster-whisper) word-level timestamps for accurate subtitles."""
 import re
+import time
 
 import config
 
@@ -10,7 +11,19 @@ def _get_model():
     global _model
     if _model is None:
         from faster_whisper import WhisperModel
-        _model = WhisperModel(config.WHISPER_MODEL, device="cpu", compute_type="int8")
+        try:  # already downloaded: load from disk without contacting huggingface.co
+            _model = WhisperModel(config.WHISPER_MODEL, device="cpu", compute_type="int8", local_files_only=True)
+        except Exception:
+            last = None
+            for attempt in range(3):  # first run: download the model (~500 MB), retrying on network errors
+                try:
+                    _model = WhisperModel(config.WHISPER_MODEL, device="cpu", compute_type="int8")
+                    break
+                except Exception as e:
+                    last = e
+                    time.sleep(10 * (attempt + 1))
+            if _model is None:
+                raise RuntimeError(f"دانلود مدل Whisper از huggingface.co نشد: {last}")
     return _model
 
 
@@ -41,3 +54,8 @@ def align_to_script(script: str, words: list[dict]) -> list[dict]:
         b = t0 + (t1 - t0) * acc / total
         out.append({"word": s, "start": a, "end": b})
     return out
+
+
+def preload():
+    """Load (and on first run download) the Whisper model ahead of time, so the first video is not slowed down."""
+    _get_model()

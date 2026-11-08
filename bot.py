@@ -223,19 +223,35 @@ async def ask_narration_approval(update, ctx):
                              [Btn("✏️ ویرایش متن", callback_data="nar_edit")]]))
 
 
+class BuildError(Exception):
+    def __init__(self, step, err):
+        super().__init__(f"مرحله‌ی «{step}»: {err}")
+
+
+def _step(name, fn, *a, **kw):
+    try:
+        return fn(*a, **kw)
+    except Exception as e:
+        log.exception("build step failed: %s", name)
+        raise BuildError(name, e) from e
+
+
 def _run_build(j, work: Path) -> Path:
     work.mkdir(parents=True, exist_ok=True)
-    audio = tts.synthesize(j["narration"], work / "narration.mp3")
-    words = stt.align_to_script(j["narration"], stt.transcribe_words(audio))
+    audio = _step("ساخت صدا با ElevenLabs", tts.synthesize, j["narration"], work / "narration.mp3")
+    spoken = _step("زمان‌بندی زیرنویس با Whisper", stt.transcribe_words, audio)
+    words = stt.align_to_script(j["narration"], spoken)
     fmt = j.get("fmt", "9x16")
     ass = video.build_ass(words, work / "subs.ass", fmt=fmt)
     media = [m for m in j.get("media", []) if m.get("path")]
     if len(media) > 1 or (media and media[0]["kind"] == "photo"):
-        src = video.build_montage(media, video.duration(audio) + 0.5, work / "montage", fmt)
+        src = _step("ترکیب ویدئوها و عکس‌ها", video.build_montage, media, video.duration(audio) + 0.5,
+                    work / "montage", fmt)
     else:
         src = Path(j["src"])
     logo = Path(config.LOGO_PATH)
-    return video.build_video(src, audio, ass, work / "final.mp4", logo if logo.exists() else None, fmt=fmt)
+    return _step("تدوین نهایی با ffmpeg", video.build_video, src, audio, ass, work / "final.mp4",
+                 logo if logo.exists() else None, fmt=fmt)
 
 
 async def build_and_send(update, ctx):
@@ -247,7 +263,10 @@ async def build_and_send(update, ctx):
         out = await asyncio.to_thread(_run_build, j, work)
     except Exception as e:
         log.exception("build failed")
-        await ctx.bot.send_message(chat, f"❌ ساخت ویدئو شکست خورد:\n{e}")
+        await ctx.bot.send_message(
+            chat, f"❌ ساخت ویدئو شکست خورد:\n{e}\n\nبرای تلاش دوباره، دکمه‌ی زیر را بزنید.",
+            reply_markup=Markup([[Btn(f"🔁 دوباره بساز ({video.FORMATS[j.get('fmt', '9x16')]['label']})",
+                                      callback_data=f"nar_ok:{j.get('fmt', '9x16')}")]]))
         return
     # keep the result outside the work dir so a failed upload can be retried
     OUTBOX.mkdir(parents=True, exist_ok=True)
@@ -614,6 +633,16 @@ def main():
     app.add_handler(MessageHandler(allowed & filters.TEXT & ~filters.COMMAND, on_text))
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_error_handler(on_error)
+    # load Whisper in the background now, so a missing download shows up at startup, not in the first video
+    import threading
+
+    def _preload():
+        try:
+            stt.preload()
+            log.info("Whisper model ready")
+        except Exception:
+            log.exception("Whisper model could not be loaded (will retry when a video is built)")
+    threading.Thread(target=_preload, daemon=True).start()
     app.run_polling()
 
 
