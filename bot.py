@@ -11,7 +11,7 @@ from pathlib import Path
 
 from telegram.error import BadRequest
 from telegram import InlineKeyboardButton as Btn, InlineKeyboardMarkup as Markup, Update
-from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes,
+from telegram.ext import (AIORateLimiter, Application, CallbackQueryHandler, CommandHandler, ContextTypes,
                           MessageHandler, PicklePersistence, filters)
 
 import config
@@ -373,7 +373,7 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif d == "skip":
         await next_in_queue(update, ctx)
     elif d == "pkg_ok":
-        j["stage"], j["media"], j["pending"] = "link", [], 0
+        j["stage"], j["media"], j["pending"], j["media_msg"] = "link", [], 0, None
         download.fresh_dir(media_root(update))
         await q.message.reply_text(
             "🎞 ویدئوها و عکس‌های این خبر را بفرستید؛ هر تعداد که خواستید، به همان ترتیبی که باید پخش شوند:\n"
@@ -399,11 +399,10 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         done = [m for m in j.get("media", []) if m.get("path")]
         if done:
             j["media"].remove(done[-1])
-        await q.message.reply_text(f"↩️ آخرین مورد حذف شد. الان: {media_summary(j.get('media', []))}",
-                                   reply_markup=media_keyboard())
+        await media_status(update, ctx)
     elif d == "media_reset":
         j["media"] = [m for m in j.get("media", []) if not m.get("path")]  # keep only in-flight downloads
-        await q.message.reply_text("🗑 همه حذف شد؛ از اول بفرستید.", reply_markup=media_keyboard())
+        await media_status(update, ctx)
     elif d == "nar_edit":
         j["stage"] = "narration_edit"
         await q.message.reply_text("متن جدید نریشن را بفرستید:")
@@ -468,12 +467,32 @@ def media_summary(media: list[dict]) -> str:
     return "، ".join(parts) or "هیچ"
 
 
+async def media_status(update, ctx):
+    """Keep ONE status message up to date (edit it) instead of replying to every file: avoids flood limits."""
+    j, chat = job(ctx), update.effective_chat.id
+    pending = j.get("pending", 0)
+    text = (f"🎞 دریافت‌شده: {media_summary(j.get('media', []))}"
+            + (f"\n⏳ در حال دانلود: {pending} مورد" if pending else "")
+            + "\n\nبعدی را بفرستید یا «✅ تمام شد» را بزنید.")
+    msg_id = j.get("media_msg")
+    if msg_id:
+        try:
+            await ctx.bot.edit_message_text(text, chat_id=chat, message_id=msg_id, reply_markup=media_keyboard())
+            return
+        except BadRequest as e:
+            if "not modified" in str(e).lower():
+                return
+    m = await ctx.bot.send_message(chat, text, reply_markup=media_keyboard())
+    j["media_msg"] = m.message_id
+
+
 async def _collect(update, ctx, label: str, fetch):
     """Reserve a slot (keeps the order the user sent things), fetch the file, then report."""
     j = job(ctx)
     slot = {"path": None, "id": time.time_ns()}  # unique id: placeholders must never compare equal
     j.setdefault("media", []).append(slot)
     j["pending"] = j.get("pending", 0) + 1
+    await media_status(update, ctx)
     try:
         d = download.fresh_dir(media_root(update) / str(time.time_ns()))
         path, kind = await fetch(d)
@@ -487,19 +506,13 @@ async def _collect(update, ctx, label: str, fetch):
         return
     finally:
         j["pending"] = max(0, j.get("pending", 1) - 1)
-    if slot not in j.get("media", []):  # user pressed «از اول» meanwhile
-        return
-    n = sum(1 for m in j["media"] if m.get("path"))
-    what = f"ویدئو، {dur:.0f} ثانیه" if kind == "video" else "عکس"
-    await update.message.reply_text(f"✅ مورد {n} اضافه شد ({what}). جمع: {media_summary(j['media'])}\n"
-                                    "بعدی را بفرستید یا «✅ تمام شد» را بزنید.", reply_markup=media_keyboard())
+        await media_status(update, ctx)
 
 
 async def add_link(update, ctx, url: str):
     async def fetch(d):
         return await asyncio.to_thread(download.download_video, url, d), "video"
-    await update.message.reply_text(f"⬇️ در حال دانلود…\n{url[:80]}")
-    await _collect(update, ctx, "ویدئوی این لینک", fetch)
+    await _collect(update, ctx, f"ویدئوی این لینک ({url[:60]})", fetch)
 
 
 async def on_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -545,7 +558,9 @@ def main():
                     "Install it (winget install Gyan.FFmpeg --source winget) or set FFMPEG_DIR in .env")
     else:
         log.info("ffmpeg found: %s", shutil.which("ffmpeg"))
+    # rate_limiter: when Telegram says "flood control, retry in N s", wait and resend instead of failing
     app = (Application.builder().token(config.TELEGRAM_BOT_TOKEN).concurrent_updates(True)
+           .rate_limiter(AIORateLimiter(max_retries=5))
            .persistence(PicklePersistence(filepath=config.WORK_DIR / "state.pickle")).build())
     allowed = filters.User(user_id=list(config.ALLOWED_USER_IDS))
     app.add_handler(CommandHandler("start", cmd_start, filters=allowed))

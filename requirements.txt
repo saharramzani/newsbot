@@ -1,4 +1,4 @@
-python-telegram-bot==21.6
+python-telegram-bot[rate-limiter]==21.6  # rate limiter: waits out Telegram flood limits
 anthropic>=0.40  # only needed if LLM_PROVIDER=anthropic
 httpx>=0.27
 faster-whisper>=1.0
