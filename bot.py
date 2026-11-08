@@ -32,19 +32,29 @@ def job(ctx) -> dict:
 
 
 # ---------- helpers ----------
-def news_keyboard(items, selected):
-    rows = [[Btn(("✅ " if i in selected else "⬜ ") + f"{i + 1}. {it['title_fa'][:48]}", callback_data=f"sel:{i}")]
-            for i, it in enumerate(items)]
+PAGE = 10  # news buttons per keyboard page
+
+
+def news_keyboard(items, selected, page=0):
+    pages = max(1, -(-len(items) // PAGE))
+    page = min(max(page, 0), pages - 1)
+    start = page * PAGE
+    rows = [[Btn(("✅ " if i in selected else "⬜ ") + ("⭐" if items[i].get("relevant") else "")
+                 + f"{i + 1}. {items[i]['title_fa'][:44]}", callback_data=f"sel:{i}")]
+            for i in range(start, min(start + PAGE, len(items)))]
+    if pages > 1:
+        rows.append([Btn("◀️ قبلی", callback_data=f"pg:{page - 1}") if page > 0 else Btn(" ", callback_data="noop"),
+                     Btn(f"صفحه {page + 1} از {pages}", callback_data="noop"),
+                     Btn("بعدی ▶️", callback_data=f"pg:{page + 1}") if page < pages - 1 else Btn(" ", callback_data="noop")])
     rows.append([Btn(f"▶️ تایید انتخاب ({len(selected)})", callback_data="go"), Btn("❌ لغو", callback_data="cancel")])
     return Markup(rows)
 
 
 def format_news(items) -> str:
-    out = ["📰 *تیترهای ۱۲ ساعت اخیر* (برای انتخاب روی دکمه بزنید)\n"]
+    out = [f"📰 همه‌ی {len(items)} خبر (جدیدترین اول؛ ⭐ = مرتبط با موضوعات اصلی)\n"]
     for i, it in enumerate(items, 1):
-        out.append(f"{i}. {it['title_fa']}\n   منبع: {it['source']} | زمان: {it.get('hours_ago_estimate', '?')} "
-                   f"(اطمینان زمانی: {it.get('time_confidence', '?')}) | ویدئو: {it.get('has_video', '?')}\n"
-                   f"   {it['summary_fa']}\n   {it['url']}\n")
+        star = "⭐ " if it.get("relevant") else ""
+        out.append(f"{i}. {star}{it['title_fa']}\n   {it['source']} | {it.get('hours_ago_estimate', '?')}\n   {it['url']}\n")
     return "\n".join(out)
 
 
@@ -67,10 +77,21 @@ def cover_title(pkg: dict) -> str:
 
 async def say(update_or_q, ctx, text, markup=None):
     chat_id = update_or_q.effective_chat.id
-    # Telegram limit is 4096 chars; split plain
-    for i in range(0, len(text), 4000):
-        last = i + 4000 >= len(text)
-        await ctx.bot.send_message(chat_id, text[i:i + 4000], reply_markup=markup if last else None)
+    # Telegram limit is 4096 chars: split on line breaks so an item is never cut in half
+    parts, cur = [], ""
+    for line in text.split("\n"):
+        while len(line) > 4000:
+            parts.append(line[:4000])
+            line = line[4000:]
+        if len(cur) + len(line) + 1 > 4000:
+            parts.append(cur)
+            cur = ""
+        cur += line + "\n"
+    if cur.strip():
+        parts.append(cur)
+    for k, part in enumerate(parts):
+        await ctx.bot.send_message(chat_id, part, reply_markup=markup if k == len(parts) - 1 else None,
+                                   disable_web_page_preview=True)
 
 
 # ---------- commands ----------
@@ -85,7 +106,7 @@ async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_news(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data["job"] = {}
-    await update.message.reply_text("🔎 در حال جست‌وجوی اخبار… (۱ تا ۳ دقیقه)")
+    await update.message.reply_text("🔎 در حال جمع‌آوری همه‌ی اخبار و ترجمه‌ی تیترها… (۱ تا ۳ دقیقه)")
     try:
         items, sources = await find_news()
     except Exception as e:
@@ -93,11 +114,10 @@ async def cmd_news(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ جست‌وجو شکست خورد:\n{e}")
         return
     j = job(ctx)
-    j.update(items=items, selected=set())
+    j.update(items=items, selected=set(), page=0)
     await say(update, ctx, format_news(items))
     if sources:
-        await say(update, ctx, "🔍 منابعی که جست‌وجو واقعاً به آن‌ها رسید (برای راستی‌آزمایی):\n"
-                  + "\n".join(f"• {s['title']} {s['uri']}" for s in sources[:12]))
+        await say(update, ctx, "\n".join(f"ℹ️ {s['title']} {s['uri']}".strip() for s in sources[:12]))
     await ctx.bot.send_message(update.effective_chat.id, "کدام خبرها؟", reply_markup=news_keyboard(items, j["selected"]))
 
 
@@ -224,7 +244,7 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     needs = {"go": "items", "pkg_redo": "current", "pkg_fb": "current", "pkg_ok": "pkg", "skip": "queue",
              "nar_edit": "pkg", "nar_ok": "src"}
     key = d.split(":")[0] if d.startswith("nar_ok") else d
-    if (d.startswith("sel:") and not j.get("items")) or (key in needs and needs[key] not in j):
+    if (d.startswith(("sel:", "pg:")) and not j.get("items")) or (key in needs and needs[key] not in j):
         await q.message.reply_text("⏳ این دکمه منقضی شده (ربات ری‌استارت شده یا دور جدید شروع شده). دوباره /news بزنید.")
         return
     if d.startswith("cov:"):
@@ -243,7 +263,12 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif d.startswith("sel:") and j.get("items"):
         i = int(d[4:])
         j["selected"] ^= {i}
-        await q.edit_message_reply_markup(news_keyboard(j["items"], j["selected"]))
+        await q.edit_message_reply_markup(news_keyboard(j["items"], j["selected"], j.get("page", 0)))
+    elif d.startswith("pg:") and j.get("items"):
+        j["page"] = int(d[3:])
+        await q.edit_message_reply_markup(news_keyboard(j["items"], j["selected"], j["page"]))
+    elif d == "noop":
+        pass
     elif d == "go":
         if not j.get("selected"):
             await q.answer("حداقل یک خبر انتخاب کنید", show_alert=True)
