@@ -32,7 +32,7 @@ WrapStyle: 2
 
 [V4+ Styles]
 Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
-Style: Default,{config.SUBTITLE_FONT},78,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,6,2,2,80,110,{f["sub_bottom"]},1
+Style: Default,{config.SUBTITLE_FONT},78,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,6,2,2,80,110,{f["sub_bottom"]},-1
 
 [Events]
 Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
@@ -51,8 +51,10 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
             if stop <= start:
                 continue
             body = " ".join(f"{{\\c{YELLOW}}}{t}{{\\c{WHITE}}}" if j == k else t for j, t in enumerate(clean))
-            # U+202B (RLE) + U+200F (RLM) force a right-to-left base direction so word order is correct
-            text = "\u202b\u200f" + body + "\u200f\u202c"
+            # Encoding -1 (style) lets libass detect the base direction from the text: Persian -> right-to-left.
+            # Newer libass (Windows builds) ignores RLE/PDF embedding marks, so we do not rely on them; a leading
+            # RLM (a strong RTL character) keeps lines that start with a Latin word or number right-to-left too.
+            text = "\u200f" + body
             lines.append(f"Dialogue: 0,{_ts(start)},{_ts(stop)},Default,,0,0,0,,{text}")
     path.write_text(header + "\n".join(lines) + "\n", encoding="utf-8")
     return path

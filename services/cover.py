@@ -104,12 +104,12 @@ def compose(bg: Path, title, out: Path, fmt: str = "9x16") -> Path:
     for i, (line, size, look) in enumerate(zip(lines, sizes, pattern)):
         text_c, box_c = LOOKS[look]
         if box_c:  # opaque banner: BorderStyle 3 draws the box in the outline colour
-            styles.append(f"Style: L{i},{FONT_NAME},{size},{text_c},{text_c},{box_c},&H00000000,0,0,0,0,100,100,0,0,3,{int(size * 0.06)},0,5,0,0,0,1")
+            styles.append(f"Style: L{i},{FONT_NAME},{size},{text_c},{text_c},{box_c},&H00000000,0,0,0,0,100,100,0,0,3,{int(size * 0.06)},0,5,0,0,0,-1")
         else:  # outlined text with a hard shadow
-            styles.append(f"Style: L{i},{FONT_NAME},{size},{text_c},{text_c},{_BLACK},&H64000000,0,0,0,0,100,100,0,0,1,{int(size * 0.035)},{int(size * 0.03)},5,0,0,0,1")
+            styles.append(f"Style: L{i},{FONT_NAME},{size},{text_c},{text_c},{_BLACK},&H64000000,0,0,0,0,100,100,0,0,1,{int(size * 0.035)},{int(size * 0.03)},5,0,0,0,-1")
         cy = y + heights[i] / 2
         y += heights[i]
-        events.append(f"Dialogue: 0,0:00:00.00,0:00:10.00,L{i},,0,0,0,,{{\\pos({w / 2:.0f},{cy:.0f})\\frz2.5}}\u202b{line}\u202c")
+        events.append(f"Dialogue: 0,0:00:00.00,0:00:10.00,L{i},,0,0,0,,{{\\pos({w / 2:.0f},{cy:.0f})\\frz2.5}}\u200f{line}")  # Encoding -1 + RLM: right-to-left (see video.build_ass)
 
     ass = out.with_suffix(".ass")
     ass.write_text(f"""[Script Info]
