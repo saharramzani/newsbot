@@ -282,6 +282,11 @@ def main():
         raise SystemExit("ALLOWED_USER_IDS is empty: refusing to run an open bot")
     # concurrent_updates: one user's long step (search / video build) must not block other users' buttons.
     # persistence: per-user progress survives a restart.
+    if not (shutil.which("ffmpeg") and shutil.which("ffprobe")):
+        log.warning("ffmpeg/ffprobe NOT found: downloading and building videos will fail. "
+                    "Install it (winget install Gyan.FFmpeg --source winget) or set FFMPEG_DIR in .env")
+    else:
+        log.info("ffmpeg found: %s", shutil.which("ffmpeg"))
     app = (Application.builder().token(config.TELEGRAM_BOT_TOKEN).concurrent_updates(True)
            .persistence(PicklePersistence(filepath=config.WORK_DIR / "state.pickle")).build())
     allowed = filters.User(user_id=list(config.ALLOWED_USER_IDS))

@@ -28,4 +28,27 @@ SUBTITLE_FONT = get("SUBTITLE_FONT", "Vazirmatn")
 NEWS_WINDOW_HOURS = int(get("NEWS_WINDOW_HOURS", "12"))
 ALLOWED_USER_IDS = {int(x) for x in get("ALLOWED_USER_IDS", "").split(",") if x.strip()}
 WORK_DIR = Path(get("WORK_DIR", "work"))
+
+
+def _ensure_ffmpeg_on_path():
+    """Windows: winget installs ffmpeg but a window opened earlier may not see it. Find it and add it to PATH."""
+    import glob
+    import shutil
+    if shutil.which("ffmpeg") and shutil.which("ffprobe"):
+        return
+    candidates = []
+    if get("FFMPEG_DIR"):
+        candidates.append(get("FFMPEG_DIR"))
+    local = get("LOCALAPPDATA")
+    if local:
+        candidates.append(os.path.join(local, "Microsoft", "WinGet", "Links"))
+        candidates += glob.glob(os.path.join(local, "Microsoft", "WinGet", "Packages", "Gyan.FFmpeg*", "*", "bin"))
+    candidates += [r"C:\ffmpeg\bin", r"C:\Program Files\ffmpeg\bin", "/opt/homebrew/bin", "/usr/local/bin"]
+    for d in candidates:
+        if os.path.isfile(os.path.join(d, "ffmpeg.exe")) or os.path.isfile(os.path.join(d, "ffmpeg")):
+            os.environ["PATH"] = d + os.pathsep + os.environ.get("PATH", "")
+            return
+
+
+_ensure_ffmpeg_on_path()
 WORK_DIR.mkdir(parents=True, exist_ok=True)
