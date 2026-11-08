@@ -58,13 +58,42 @@ def format_news(items) -> str:
     return "\n".join(out)
 
 
-def format_package(pkg: dict) -> str:
+# Persian names of the outlets, for the source line in captions (prefix match on the feed name)
+SOURCE_FA = [("Bloomberg", "بلومبرگ"), ("Reuters", "رویترز"), ("Financial Times", "فایننشال تایمز"),
+             ("Wall Street Journal", "وال‌استریت ژورنال"), ("Asharq Al-Awsat", "الشرق الاوسط"), ("Asharq", "الشرق"),
+             ("Foreign Policy", "فارن پالیسی"), ("Al Jazeera", "الجزیره"), ("OilPrice", "اویل‌پرایس"),
+             ("The Guardian", "گاردین"), ("BBC Persian", "بی‌بی‌سی فارسی"), ("BBC", "بی‌بی‌سی"),
+             ("New York Times", "نیویورک تایمز")]
+
+
+def source_fa(item: dict) -> str:
+    name = item.get("source", "")
+    for prefix, fa in SOURCE_FA:
+        if name.startswith(prefix):
+            return fa
+    return re.sub(r"\s*\(.*?\)\s*$", "", name).strip()  # e.g. "دنیای اقتصاد (Google News)" -> "دنیای اقتصاد"
+
+
+def final_caption(pkg: dict, item: dict, limit: int = 1024) -> str:
+    """Caption + mandatory source line + hashtags. The caption body is shortened if needed, never the source."""
+    src = source_fa(item)
+    source_line = f"📌 منبع: {src}" if src else ""
+    tags = " ".join(pkg.get("hashtags", []))
+    tail = "\n\n".join(x for x in (source_line, tags) if x)
+    body = pkg.get("caption", "").strip()
+    room = limit - len(tail) - 2
+    if len(body) > room:
+        body = body[:max(0, room - 1)].rstrip() + "…"
+    return f"{body}\n\n{tail}" if body else tail
+
+
+def format_package(pkg: dict, item: dict | None = None) -> str:
     scenes = "\n".join(f"• {s.get('time', '')} | {s.get('visual', '')} | «{s.get('text_on_screen', '')}»"
                        for s in pkg.get("scenario", []))
     flags = "\n".join(f"⚠️ {f}" for f in pkg.get("flags", [])) or "—"
     tips = "\n".join(f"💡 {t}" for t in pkg.get("tips", [])) or "—"
-    return (f"🎬 *هوک*\n{pkg['hook']}\n\n🖼 *تیتر کاور*\n{cover_title(pkg)}\n\n🎙 *نریشن*\n{pkg['narration']}\n\n📝 *کپشن*\n{pkg['caption']}\n"
-            f"{' '.join(pkg.get('hashtags', []))}\n\n🎞 *سناریو*\n{scenes}\n\n*موارد نیازمند بررسی شما:*\n{flags}\n\n{tips}")
+    return (f"🎬 *هوک*\n{pkg['hook']}\n\n🖼 *تیتر کاور*\n{cover_title(pkg)}\n\n🎙 *نریشن*\n{pkg['narration']}\n\n📝 *کپشن*\n{final_caption(pkg, item or {})}\n"
+            f"\n🎞 *سناریو*\n{scenes}\n\n*موارد نیازمند بررسی شما:*\n{flags}\n\n{tips}")
 
 
 def cover_title(pkg: dict) -> str:
@@ -141,7 +170,7 @@ async def write_and_show(update, ctx, feedback=None):
         log.exception("writer failed")
         await ctx.bot.send_message(update.effective_chat.id, f"❌ نوشتن شکست خورد:\n{e}")
         return
-    await say(update, ctx, format_package(j["pkg"]), Markup([[
+    await say(update, ctx, format_package(j["pkg"], j["current"]), Markup([[
         Btn("✅ تایید", callback_data="pkg_ok"), Btn("🔁 بازنویسی", callback_data="pkg_redo"),
         Btn("✏️ با توضیح من", callback_data="pkg_fb"), Btn("⏭ رد کردن", callback_data="skip")]]))
 
@@ -180,7 +209,7 @@ async def build_and_send(update, ctx):
     with out.open("rb") as f:
         size = video.FORMATS[j.get("fmt", "9x16")]
         await ctx.bot.send_video(chat, f, supports_streaming=True, width=size["w"], height=size["h"],
-                                 caption=(j["pkg"]["caption"] + "\n" + " ".join(j["pkg"].get("hashtags", [])))[:1000])
+                                 caption=final_caption(j["pkg"], j["current"]))
     await ctx.bot.send_document(chat, out.open("rb"), filename="reel.mp4", caption="📥 فایل برای دانلود/ذخیره")
     shutil.rmtree(work, ignore_errors=True)
     await make_cover(update, ctx)
