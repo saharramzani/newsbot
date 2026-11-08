@@ -1,4 +1,5 @@
 """Subtitles (ASS, burned in) + 9:16 Instagram video assembly with ffmpeg."""
+import os
 import subprocess
 from pathlib import Path
 
@@ -47,11 +48,25 @@ def duration(path: Path) -> float:
     return float(out.stdout.strip())
 
 
+def _filter_path(p: Path) -> str:
+    """Path for use inside an ffmpeg filter option (e.g. ass=...).
+
+    Windows backslashes are filter escape characters and get swallowed, and a drive letter's ':' splits
+    options. Use a forward-slash path (relative when possible), escape ':' and quote it.
+    """
+    try:
+        s = os.path.relpath(p)
+    except ValueError:  # Windows: different drive than the working directory
+        s = str(Path(p).resolve())
+    s = s.replace("\\", "/").replace(":", "\\:").replace("'", "")
+    return f"'{s}'"
+
+
 def build_video(src: Path, narration: Path, ass: Path, out: Path, logo: Path | None = None) -> Path:
     dur = duration(narration) + 0.5
     cmd = ["ffmpeg", "-y", "-stream_loop", "-1", "-i", str(src), "-i", str(narration)]
     fonts = Path("assets/fonts")
-    ass_filter = f"ass={ass}" + (f":fontsdir={fonts}" if fonts.exists() else "")
+    ass_filter = f"ass={_filter_path(ass)}" + (f":fontsdir={_filter_path(fonts)}" if fonts.exists() else "")
     base = f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1,fps=30[bg]"
     if logo and logo.exists():
         cmd += ["-i", str(logo)]
