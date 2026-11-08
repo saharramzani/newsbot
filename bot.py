@@ -207,6 +207,9 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     j, text = job(ctx), update.message.text
     stage = j.get("stage")
+    if stage == "downloading":
+        await update.message.reply_text("⏳ هنوز در حال دانلود ویدئوی قبلی هستم؛ صبر کنید.")
+        return
     if stage == "feedback":
         j["stage"] = None
         await write_and_show(update, ctx, text)
@@ -215,13 +218,17 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if not m:
             await update.message.reply_text("لینک معتبر نیست.")
             return
-        await update.message.reply_text("⬇️ در حال دانلود…")
+        j["stage"] = "downloading"
+        await update.message.reply_text("⬇️ در حال دانلود… (تا تمام نشود مرحله‌ی بعد شروع نمی‌شود)")
         try:
-            j["src"] = str(await asyncio.to_thread(download.download_video, m.group(0), config.WORK_DIR / f"dl_{update.effective_chat.id}"))
+            src = await asyncio.to_thread(download.download_video, m.group(0), config.WORK_DIR / f"dl_{update.effective_chat.id}")
         except Exception as e:
-            await update.message.reply_text(f"❌ دانلود نشد:\n{e}\n\nمی‌توانید خود فایل را آپلود کنید.")
+            log.exception("download failed")
+            j["stage"] = "link"
+            await update.message.reply_text(f"❌ دانلود نشد:\n{e}\n\nلینک دیگری بفرستید یا خود فایل را آپلود کنید.")
             return
-        j["stage"] = None
+        j["src"], j["stage"] = str(src), None
+        await report_source(update, src)
         await ask_narration_approval(update, ctx)
     elif stage == "narration_edit":
         j["pkg"]["narration"] = text
@@ -236,13 +243,27 @@ async def on_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if j.get("stage") != "link":
         return
     att = update.message.video or update.message.document
-    d = config.WORK_DIR / f"dl_{update.effective_chat.id}"
-    d.mkdir(parents=True, exist_ok=True)
-    path = d / "source.mp4"
-    f = await att.get_file()
-    await f.download_to_drive(path)
+    j["stage"] = "downloading"
+    await update.message.reply_text("⬇️ در حال دریافت فایل…")
+    try:
+        path = download.fresh_dir(config.WORK_DIR / f"dl_{update.effective_chat.id}") / "source.mp4"
+        f = await att.get_file()
+        await f.download_to_drive(path)
+        await asyncio.to_thread(download.check_video, path)
+    except Exception as e:
+        log.exception("upload failed")
+        j["stage"] = "link"
+        await update.message.reply_text(f"❌ فایل دریافت نشد:\n{e}\n\n(سقف فایل برای ربات ~۲۰MB است؛ فایل بزرگ‌تر را با لینک بفرستید.)")
+        return
     j["src"], j["stage"] = str(path), None
+    await report_source(update, path)
     await ask_narration_approval(update, ctx)
+
+
+async def report_source(update, path: Path):
+    secs = await asyncio.to_thread(video.duration, path)
+    mb = path.stat().st_size / 1_000_000
+    await update.message.reply_text(f"✅ ویدئو کامل دریافت شد: {mb:.1f}MB، {secs:.0f} ثانیه")
 
 
 async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE):
