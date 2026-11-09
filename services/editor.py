@@ -11,12 +11,14 @@ MIN_SENTENCE = 1.2   # shorter sentences are merged into the next one (no flash 
 MAX_IMAGES = 30      # frames sent to the model in total
 
 
-def sentences(narration: str, words: list[dict], total: float) -> list[dict]:
-    """Split the narration into sentences with start/end times taken from the word timings.
+WORDS_PER_SECOND = 2.6  # typical narration speed, for estimates before the voice exists
 
-    `words` comes from stt.align_to_script: the script's words, in order, with times. The first sentence starts at
-    0 and each one ends where the next begins, so the cuts land exactly on sentence starts and the timeline has no
-    gaps.
+
+def _groups(narration: str) -> tuple[list[str], list[list[int]]]:
+    """Tokens of the narration and the sentences as lists of token indexes; short sentences are merged.
+
+    Merging uses an estimate from text length only, so the split is the same before and after the voice is made
+    (the edit plan is approved before the voice is built, and must still fit afterwards).
     """
     tokens = [t for t in re.sub(r"[/]", " ", narration).split() if t]
     groups, cur = [], []
@@ -27,29 +29,56 @@ def sentences(narration: str, words: list[dict], total: float) -> list[dict]:
             cur = []
     if cur:
         groups.append(cur)
+    def est(g):
+        return len(g) / WORDS_PER_SECOND
+    merged = []
+    for g in groups:
+        if merged and est(merged[-1]) < MIN_SENTENCE:
+            merged[-1] = merged[-1] + g
+        else:
+            merged.append(g)
+    if len(merged) > 1 and est(merged[-1]) < MIN_SENTENCE:
+        last = merged.pop()
+        merged[-1] = merged[-1] + last
+    return tokens, merged
+
+
+def _build(tokens, groups, starts, total):
+    return [{"text": " ".join(tokens[k] for k in g), "start": 0.0 if i == 0 else starts[i],
+             "end": starts[i + 1] if i + 1 < len(groups) else total} for i, g in enumerate(groups)]
+
+
+def estimate(narration: str) -> list[dict]:
+    """Sentences with estimated times (no voice yet)."""
+    tokens, groups = _groups(narration)
+    total = len(tokens) / WORDS_PER_SECOND + 0.5
+    n_chars = sum(len(t) for t in tokens) or 1
+    acc, starts = 0, []
+    for g in groups:
+        starts.append((total - 0.5) * acc / n_chars)
+        acc += sum(len(tokens[k]) for k in g)
+    return _build(tokens, groups, starts, total)
+
+
+def sentences(narration: str, words: list[dict], total: float) -> list[dict]:
+    """The same sentences as estimate(), timed from the real voice.
+
+    `words` comes from stt.align_to_script: the script's words, in order, with times. The first sentence starts at
+    0 and each one ends where the next begins, so the cuts land exactly on sentence starts and there are no gaps.
+    """
+    tokens, groups = _groups(narration)
     if len(words) == len(tokens) and words:
         starts = [words[g[0]]["start"] for g in groups]
-    else:  # timings unusable: spread sentences by text length
+    else:  # timings unusable: spread by text length
         n_chars = sum(len(t) for t in tokens) or 1
         acc, starts = 0, []
         for g in groups:
             starts.append(total * acc / n_chars)
             acc += sum(len(tokens[k]) for k in g)
-    out = []
-    for i, g in enumerate(groups):
-        start = 0.0 if i == 0 else starts[i]
-        end = starts[i + 1] if i + 1 < len(groups) else total
-        out.append({"text": " ".join(tokens[k] for k in g), "start": start, "end": max(end, start + 0.3)})
-    merged = []
-    for s in out:  # merge very short sentences into the next one
-        if merged and merged[-1]["end"] - merged[-1]["start"] < MIN_SENTENCE:
-            merged[-1] = {"text": merged[-1]["text"] + " " + s["text"], "start": merged[-1]["start"], "end": s["end"]}
-        else:
-            merged.append(s)
-    if len(merged) > 1 and merged[-1]["end"] - merged[-1]["start"] < MIN_SENTENCE:
-        last = merged.pop()
-        merged[-1] = {"text": merged[-1]["text"] + " " + last["text"], "start": merged[-1]["start"], "end": last["end"]}
-    return merged
+    out = _build(tokens, groups, starts, total)
+    for s in out:
+        s["end"] = max(s["end"], s["start"] + 0.3)
+    return out
 
 
 def _frame(src: str, at: float | None, out: Path) -> bytes | None:

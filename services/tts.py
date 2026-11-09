@@ -1,10 +1,14 @@
 """ElevenLabs text-to-speech. (Whisper cannot synthesize speech; it is used in stt.py.)"""
+import hashlib
+import shutil
 import time
 from pathlib import Path
 
 import httpx
 
 import config
+
+CACHE_DIR = config.WORK_DIR / "tts_cache"
 
 
 def clean_for_tts(text: str) -> str:
@@ -15,6 +19,12 @@ def clean_for_tts(text: str) -> str:
 def synthesize(text: str, out_path: Path) -> Path:
     if not (config.ELEVENLABS_API_KEY and config.ELEVENLABS_VOICE_ID):
         raise RuntimeError("ELEVENLABS_API_KEY / ELEVENLABS_VOICE_ID not set")
+    # the same text with the same voice is never paid for twice (rebuilds, retries, a re-cut with another plan)
+    key = hashlib.sha1(f"{config.ELEVENLABS_VOICE_ID}|{config.ELEVENLABS_MODEL}|{text}".encode()).hexdigest()
+    cached = CACHE_DIR / f"{key}.mp3"
+    if cached.exists() and cached.stat().st_size > 1000:
+        shutil.copyfile(cached, out_path)
+        return out_path
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{config.ELEVENLABS_VOICE_ID}"
     for attempt in range(4):  # network hiccups and ElevenLabs overloads are common; retry with back-off
         try:
@@ -37,6 +47,10 @@ def synthesize(text: str, out_path: Path) -> Path:
     if r.status_code >= 400:
         raise RuntimeError(_explain(r))
     out_path.write_bytes(r.content)
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(out_path, cached)
+    for old in sorted(CACHE_DIR.glob("*.mp3"), key=lambda f: f.stat().st_mtime)[:-50]:  # keep the last 50
+        old.unlink(missing_ok=True)
     return out_path
 
 

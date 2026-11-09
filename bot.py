@@ -240,17 +240,18 @@ def done_media(j) -> list[dict]:
     return [m for m in j.get("media", []) if m.get("path")]
 
 
-def _prepare(j, work: Path) -> dict:
-    """Voice, word timings, subtitles and narration sentences (everything except the picture)."""
+def _prepare(j):
+    """Voice, word timings, subtitles; replaces the estimated sentence times with real ones (same sentences)."""
+    prep = j["prep"]
+    work = Path(prep["work"])
     work.mkdir(parents=True, exist_ok=True)
     audio = _step("ساخت صدا با ElevenLabs", tts.synthesize, j["narration"], work / "narration.mp3")
     spoken = _step("زمان‌بندی زیرنویس با Whisper", stt.transcribe_words, audio)
     words = stt.align_to_script(j["narration"], spoken)
-    fmt = j.get("fmt", "9x16")
-    ass = video.build_ass(words, work / "subs.ass", fmt=fmt)
+    ass = video.build_ass(words, work / "subs.ass", fmt=prep["fmt"])
     total = video.duration(audio) + 0.5
-    return {"work": str(work), "audio": str(audio), "ass": str(ass), "fmt": fmt, "total": total,
-            "sentences": editor.sentences(j["narration"], words, total), "plan": None}
+    prep.update(audio=str(audio), ass=str(ass), total=total,
+                sentences=editor.sentences(j["narration"], words, total))
 
 
 def _plan(j, feedback: str | None = None) -> list[dict]:
@@ -280,26 +281,36 @@ def retry_markup(j) -> Markup:
 
 
 async def build_and_send(update, ctx):
-    """Step 1 after narration approval: voice + timings; then an AI edit plan for approval (2+ items) or render."""
+    """After narration approval. 2+ items: AI edit plan FIRST (no ElevenLabs credits spent until it is approved);
+    otherwise straight to voice + render."""
     j = job(ctx)
     chat = update.effective_chat.id
     if j.get("prep"):  # an earlier attempt: drop its files
         shutil.rmtree(j["prep"]["work"], ignore_errors=True)
-        j["prep"] = None
-    work = config.WORK_DIR / f"{chat}_{int(time.time())}"
-    await ctx.bot.send_message(chat, "⚙️ ساخت نریشن و زمان‌بندی زیرنویس…")
-    try:
-        j["prep"] = await asyncio.to_thread(_prepare, j, work)
-    except Exception as e:
-        log.exception("prepare failed")
-        await ctx.bot.send_message(chat, f"❌ ساخت ویدئو شکست خورد:\n{e}\n\nبرای تلاش دوباره، دکمه‌ی زیر را بزنید.",
-                                   reply_markup=retry_markup(j))
-        return
+    j["prep"] = {"work": str(config.WORK_DIR / f"{chat}_{int(time.time())}"), "fmt": j.get("fmt", "9x16"),
+                 "sentences": editor.estimate(j["narration"]), "plan": None, "audio": None}
+    j["prep"]["total"] = j["prep"]["sentences"][-1]["end"]
     if len(done_media(j)) < 2:
-        await render_and_send(update, ctx)
+        await produce(update, ctx)
         return
     await ctx.bot.send_message(chat, "🧠 هوش مصنوعی در حال دیدن تصویرها و چیدنشان روی جمله‌های نریشن است…")
     await make_plan(update, ctx)
+
+
+async def produce(update, ctx):
+    """Voice (cached: never paid twice for the same text) + timings, then the final render."""
+    j = job(ctx)
+    chat = update.effective_chat.id
+    if not (j["prep"].get("audio") and Path(j["prep"]["audio"]).exists()):
+        await ctx.bot.send_message(chat, "⚙️ ساخت نریشن و زمان‌بندی زیرنویس…")
+        try:
+            await asyncio.to_thread(_prepare, j)
+        except Exception as e:
+            log.exception("prepare failed")
+            await ctx.bot.send_message(chat, f"❌ ساخت ویدئو شکست خورد:\n{e}\n\nبرای تلاش دوباره، دکمه‌ی زیر را بزنید.",
+                                       reply_markup=Markup([[Btn("🔁 دوباره امتحان کن", callback_data="plan_ok")]]))
+            return
+    await render_and_send(update, ctx)
 
 
 async def make_plan(update, ctx, feedback: str | None = None):
@@ -322,7 +333,9 @@ def _mmss(t: float) -> str:
 async def show_plan(update, ctx):
     j = job(ctx)
     prep, media = j["prep"], done_media(j)
-    lines = [f"🎬 نقشه‌ی تدوین (جمع {prep['total']:.0f} ثانیه)\n"]
+    approx = "" if prep.get("audio") else "≈"
+    lines = [f"🎬 نقشه‌ی تدوین (جمع {approx}{prep['total']:.0f} ثانیه"
+             + ("؛ زمان‌ها تقریبی است و بعد از ساخت صدا دقیق می‌شود" if approx else "") + ")\n"]
     for p, sn in zip(prep["plan"], prep["sentences"]):
         m = media[p["item"] - 1]
         if m["kind"] == "video":
@@ -556,7 +569,7 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return
         if d == "plan_ok":
             await q.edit_message_reply_markup(None)  # no double render from a second press
-            await render_and_send(update, ctx)
+            await produce(update, ctx)
         elif d == "plan_edit":
             j["stage"] = "plan_feedback"
             await q.message.reply_text(
