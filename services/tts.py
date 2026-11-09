@@ -16,9 +16,59 @@ def clean_for_tts(text: str) -> str:
     return text.replace("/", "...").strip()
 
 
+FALLBACK_STATUSES = {"quota_exceeded", "invalid_api_key", "detected_unusual_activity", "missing_permissions"}
+
+
+class ElevenLabsError(RuntimeError):
+    def __init__(self, msg, status=""):
+        super().__init__(msg)
+        self.status = status
+
+
 def synthesize(text: str, out_path: Path) -> Path:
+    return synthesize_with_info(text, out_path)[0]
+
+
+def synthesize_with_info(text: str, out_path: Path) -> tuple[Path, str]:
+    """ElevenLabs first; if its credits run out (or the key stops working) and a fallback is configured, use the
+    free Microsoft Edge voice. Returns (path, engine) with engine 'elevenlabs' or 'edge'."""
+    try:
+        return _elevenlabs(text, out_path), "elevenlabs"
+    except ElevenLabsError as e:
+        missing_key = not (config.ELEVENLABS_API_KEY and config.ELEVENLABS_VOICE_ID)
+        if config.FALLBACK_TTS != "edge" or not (missing_key or e.status in FALLBACK_STATUSES):
+            raise
+        return _edge(text, out_path), "edge"
+
+
+def _edge(text: str, out_path: Path) -> Path:
+    import asyncio
+
+    import edge_tts
+    key = hashlib.sha1(f"edge|{config.EDGE_VOICE}|{config.EDGE_RATE}|{text}".encode()).hexdigest()
+    cached = CACHE_DIR / f"{key}.mp3"
+    if cached.exists() and cached.stat().st_size > 1000:
+        shutil.copyfile(cached, out_path)
+        return out_path
+    last = None
+    for attempt in range(3):
+        try:
+            asyncio.run(edge_tts.Communicate(clean_for_tts(text), config.EDGE_VOICE, rate=config.EDGE_RATE)
+                        .save(str(out_path)))
+            break
+        except Exception as e:
+            last = e
+            time.sleep(3 * (attempt + 1))
+    else:
+        raise RuntimeError(f"صدای رایگان مایکروسافت (Edge) هم ساخته نشد: {last}")
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(out_path, cached)
+    return out_path
+
+
+def _elevenlabs(text: str, out_path: Path) -> Path:
     if not (config.ELEVENLABS_API_KEY and config.ELEVENLABS_VOICE_ID):
-        raise RuntimeError("ELEVENLABS_API_KEY / ELEVENLABS_VOICE_ID not set")
+        raise ElevenLabsError("ELEVENLABS_API_KEY / ELEVENLABS_VOICE_ID not set", "invalid_api_key")
     # the same text with the same voice is never paid for twice (rebuilds, retries, a re-cut with another plan)
     key = hashlib.sha1(f"{config.ELEVENLABS_VOICE_ID}|{config.ELEVENLABS_MODEL}|{text}".encode()).hexdigest()
     cached = CACHE_DIR / f"{key}.mp3"
@@ -45,7 +95,7 @@ def synthesize(text: str, out_path: Path) -> Path:
             continue
         break
     if r.status_code >= 400:
-        raise RuntimeError(_explain(r))
+        raise ElevenLabsError(*_explain(r))
     out_path.write_bytes(r.content)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(out_path, cached)
@@ -73,4 +123,5 @@ def _explain(r) -> str:
         detail = {"message": detail}
     status, msg = detail.get("status", ""), detail.get("message", "") or r.text[:300]
     hint = HINTS.get(status, "")
-    return f"ElevenLabs خطای {r.status_code} داد ({status or 'بدون کد'}): {msg}" + (f"\n👉 {hint}" if hint else "")
+    return (f"ElevenLabs خطای {r.status_code} داد ({status or 'بدون کد'}): {msg}" + (f"\n👉 {hint}" if hint else ""),
+            status)

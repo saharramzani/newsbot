@@ -245,7 +245,8 @@ def _prepare(j):
     prep = j["prep"]
     work = Path(prep["work"])
     work.mkdir(parents=True, exist_ok=True)
-    audio = _step("ساخت صدا با ElevenLabs", tts.synthesize, j["narration"], work / "narration.mp3")
+    audio, engine = _step("ساخت صدا", tts.synthesize_with_info, j["narration"], work / "narration.mp3")
+    prep["voice_engine"] = engine
     spoken = _step("زمان‌بندی زیرنویس با Whisper", stt.transcribe_words, audio)
     words = stt.align_to_script(j["narration"], spoken)
     ass = video.build_ass(words, work / "subs.ass", fmt=prep["fmt"])
@@ -310,6 +311,9 @@ async def produce(update, ctx):
             await ctx.bot.send_message(chat, f"❌ ساخت ویدئو شکست خورد:\n{e}\n\nبرای تلاش دوباره، دکمه‌ی زیر را بزنید.",
                                        reply_markup=Markup([[Btn("🔁 دوباره امتحان کن", callback_data="plan_ok")]]))
             return
+        if j["prep"].get("voice_engine") == "edge":
+            await ctx.bot.send_message(chat, "ℹ️ اعتبار ElevenLabs تمام شده (یا کلیدش کار نمی‌کند)؛ این بار از صدای "
+                                             "رایگان مایکروسافت استفاده شد. بعد از شارژ ElevenLabs خودکار به صدای اصلی برمی‌گردد.")
     await render_and_send(update, ctx)
 
 
