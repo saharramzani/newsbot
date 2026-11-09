@@ -17,7 +17,7 @@ from telegram.ext import (AIORateLimiter, Application, CallbackQueryHandler, Com
 import config
 from agents.scout import find_news
 from agents.writer import write_package
-from services import cover, download, stt, tts, video
+from services import cover, download, editor, stt, tts, video
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 # httpx logs full URLs at INFO level, and Telegram URLs contain the bot token
@@ -236,38 +236,122 @@ def _step(name, fn, *a, **kw):
         raise BuildError(name, e) from e
 
 
-def _run_build(j, work: Path) -> Path:
+def done_media(j) -> list[dict]:
+    return [m for m in j.get("media", []) if m.get("path")]
+
+
+def _prepare(j, work: Path) -> dict:
+    """Voice, word timings, subtitles and narration sentences (everything except the picture)."""
     work.mkdir(parents=True, exist_ok=True)
     audio = _step("ساخت صدا با ElevenLabs", tts.synthesize, j["narration"], work / "narration.mp3")
     spoken = _step("زمان‌بندی زیرنویس با Whisper", stt.transcribe_words, audio)
     words = stt.align_to_script(j["narration"], spoken)
     fmt = j.get("fmt", "9x16")
     ass = video.build_ass(words, work / "subs.ass", fmt=fmt)
-    media = [m for m in j.get("media", []) if m.get("path")]
-    if len(media) > 1 or (media and media[0]["kind"] == "photo"):
-        src = _step("ترکیب ویدئوها و عکس‌ها", video.build_montage, media, video.duration(audio) + 0.5,
-                    work / "montage", fmt)
+    total = video.duration(audio) + 0.5
+    return {"work": str(work), "audio": str(audio), "ass": str(ass), "fmt": fmt, "total": total,
+            "sentences": editor.sentences(j["narration"], words, total), "plan": None}
+
+
+def _plan(j, feedback: str | None = None) -> list[dict]:
+    prep, media = j["prep"], done_media(j)
+    shots = editor.frames(media, Path(prep["work"]) / "frames")
+    return editor.plan(prep["sentences"], media, shots, feedback, prep.get("plan"))
+
+
+def _render(j) -> Path:
+    prep, media = j["prep"], done_media(j)
+    work, fmt = Path(prep["work"]), prep["fmt"]
+    if prep.get("plan"):
+        segs = editor.segments(prep["plan"], prep["sentences"], media)
+        src = _step("ترکیب ویدئوها و عکس‌ها", video.build_montage, media, prep["total"], work / "montage", fmt, segs)
+    elif len(media) > 1 or (media and media[0]["kind"] == "photo"):
+        src = _step("ترکیب ویدئوها و عکس‌ها", video.build_montage, media, prep["total"], work / "montage", fmt)
     else:
         src = Path(j["src"])
     logo = Path(config.LOGO_PATH)
-    return _step("تدوین نهایی با ffmpeg", video.build_video, src, audio, ass, work / "final.mp4",
-                 logo if logo.exists() else None, fmt=fmt)
+    return _step("تدوین نهایی با ffmpeg", video.build_video, src, Path(prep["audio"]), Path(prep["ass"]),
+                 work / "final.mp4", logo if logo.exists() else None, fmt=fmt)
+
+
+def retry_markup(j) -> Markup:
+    fmt = j.get("fmt", "9x16")
+    return Markup([[Btn(f"🔁 دوباره بساز ({video.FORMATS[fmt]['label']})", callback_data=f"nar_ok:{fmt}")]])
 
 
 async def build_and_send(update, ctx):
+    """Step 1 after narration approval: voice + timings; then an AI edit plan for approval (2+ items) or render."""
     j = job(ctx)
     chat = update.effective_chat.id
+    if j.get("prep"):  # an earlier attempt: drop its files
+        shutil.rmtree(j["prep"]["work"], ignore_errors=True)
+        j["prep"] = None
     work = config.WORK_DIR / f"{chat}_{int(time.time())}"
-    await ctx.bot.send_message(chat, "⚙️ ساخت نریشن ← Whisper ← تدوین… (چند دقیقه)")
+    await ctx.bot.send_message(chat, "⚙️ ساخت نریشن و زمان‌بندی زیرنویس…")
     try:
-        out = await asyncio.to_thread(_run_build, j, work)
+        j["prep"] = await asyncio.to_thread(_prepare, j, work)
     except Exception as e:
-        log.exception("build failed")
-        await ctx.bot.send_message(
-            chat, f"❌ ساخت ویدئو شکست خورد:\n{e}\n\nبرای تلاش دوباره، دکمه‌ی زیر را بزنید.",
-            reply_markup=Markup([[Btn(f"🔁 دوباره بساز ({video.FORMATS[j.get('fmt', '9x16')]['label']})",
-                                      callback_data=f"nar_ok:{j.get('fmt', '9x16')}")]]))
+        log.exception("prepare failed")
+        await ctx.bot.send_message(chat, f"❌ ساخت ویدئو شکست خورد:\n{e}\n\nبرای تلاش دوباره، دکمه‌ی زیر را بزنید.",
+                                   reply_markup=retry_markup(j))
         return
+    if len(done_media(j)) < 2:
+        await render_and_send(update, ctx)
+        return
+    await ctx.bot.send_message(chat, "🧠 هوش مصنوعی در حال دیدن تصویرها و چیدنشان روی جمله‌های نریشن است…")
+    await make_plan(update, ctx)
+
+
+async def make_plan(update, ctx, feedback: str | None = None):
+    j, chat = job(ctx), update.effective_chat.id
+    try:
+        j["prep"]["plan"] = await asyncio.to_thread(_plan, j, feedback)
+    except Exception as e:
+        log.exception("edit plan failed")
+        if not j["prep"].get("plan"):
+            j["prep"]["plan"] = editor.simple_plan(j["prep"]["sentences"], done_media(j))
+        await ctx.bot.send_message(chat, f"⚠️ هوش مصنوعی نقشه‌ی تدوین را نساخت ({str(e)[:200]}).\n"
+                                         "فعلاً نقشه‌ی قبلی یا ترتیب ساده نشان داده می‌شود.")
+    await show_plan(update, ctx)
+
+
+def _mmss(t: float) -> str:
+    return f"{int(t // 60)}:{int(t % 60):02d}"
+
+
+async def show_plan(update, ctx):
+    j = job(ctx)
+    prep, media = j["prep"], done_media(j)
+    lines = [f"🎬 نقشه‌ی تدوین (جمع {prep['total']:.0f} ثانیه)\n"]
+    for p, sn in zip(prep["plan"], prep["sentences"]):
+        m = media[p["item"] - 1]
+        if m["kind"] == "video":
+            what = f"ویدئو {p['item']}" + (f" از ثانیه {p['at']:.0f}" if p.get("at") is not None else "")
+        else:
+            what = f"عکس {p['item']}"
+        note = f" «{m['note'][:30]}»" if m.get("note") else ""
+        why = f" — {p['why']}" if p.get("why") else ""
+        lines.append(f"{p['sentence']}. {_mmss(sn['start'])}–{_mmss(sn['end'])}  «{sn['text'][:70]}»\n"
+                     f"   ← {what}{note}{why}\n")
+    await say(update, ctx, "\n".join(lines), Markup([
+        [Btn("✅ تایید و ساخت ویدئو", callback_data="plan_ok")],
+        [Btn("✏️ تغییر با توضیح من", callback_data="plan_edit"), Btn("🔀 ترتیب ساده", callback_data="plan_simple")]]))
+
+
+async def render_and_send(update, ctx):
+    """Step 2: montage + subtitles -> final video, then send it with caption and cover."""
+    j = job(ctx)
+    chat = update.effective_chat.id
+    await ctx.bot.send_message(chat, "🎬 تدوین نهایی… (چند دقیقه)")
+    try:
+        out = await asyncio.to_thread(_render, j)
+    except Exception as e:
+        log.exception("render failed")
+        await ctx.bot.send_message(chat, f"❌ ساخت ویدئو شکست خورد:\n{e}\n\nبرای تلاش دوباره، دکمه‌ی زیر را بزنید.",
+                                   reply_markup=Markup([[Btn("🔁 دوباره تدوین کن", callback_data="plan_ok")]]))
+        return
+    work = Path(j["prep"]["work"])
+    j["prep"] = None
     # keep the result outside the work dir so a failed upload can be retried
     OUTBOX.mkdir(parents=True, exist_ok=True)
     key = f"{chat}_{int(time.time())}"
@@ -466,6 +550,21 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif d == "nar_edit":
         j["stage"] = "narration_edit"
         await q.message.reply_text("متن جدید نریشن را بفرستید:")
+    elif d in ("plan_ok", "plan_edit", "plan_simple"):
+        if not j.get("prep"):
+            await q.message.reply_text("⏳ این نقشه منقضی شده؛ دوباره «ساخت» را بزنید.", reply_markup=retry_markup(j))
+            return
+        if d == "plan_ok":
+            await q.edit_message_reply_markup(None)  # no double render from a second press
+            await render_and_send(update, ctx)
+        elif d == "plan_edit":
+            j["stage"] = "plan_feedback"
+            await q.message.reply_text(
+                "توضیح بدهید چه تغییری می‌خواهید؛ مثلاً:\n• «جمله‌ی ۳ رو با عکس ۲ بذار»\n"
+                "• «ویدئوی ۱ رو از ثانیه ۴۰ نشون بده»\n• «ناو هواپیمابر بیشتر دیده بشه»")
+        else:
+            j["prep"]["plan"] = editor.simple_plan(j["prep"]["sentences"], done_media(j))
+            await show_plan(update, ctx)
     elif d.startswith("nar_ok"):
         fmt = d.split(":", 1)[1] if ":" in d else "9x16"  # old buttons had no format
         j["fmt"] = fmt if fmt in video.FORMATS else "9x16"
@@ -488,16 +587,29 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("🖼 در حال ساخت کاور جدید…")
             await send_cover(update, ctx, key)
         return
+    if stage == "plan_feedback":
+        j["stage"] = None
+        if not j.get("prep"):
+            await update.message.reply_text("⏳ این نقشه منقضی شده؛ دوباره «ساخت» را بزنید.")
+            return
+        await update.message.reply_text("🧠 در حال اعمال توضیح شما روی نقشه‌ی تدوین…")
+        await make_plan(update, ctx, text)
+        return
     if stage == "feedback":
         j["stage"] = None
         await write_and_show(update, ctx, text)
     elif stage == "link":
         urls = URL_RE.findall(text)
-        if not urls:
-            await update.message.reply_text("لینک معتبر نیست. لینک یا فایل بفرستید، یا «✅ تمام شد» را بزنید.",
-                                            reply_markup=media_keyboard())
+        rest = URL_RE.sub(" ", text).strip()
+        if not urls:  # plain text: a description of the last item sent
+            if not j.get("media"):
+                await update.message.reply_text("اول لینک یا فایل بفرستید؛ بعد می‌توانید زیرش توضیح بنویسید.")
+                return
+            j["media"][-1]["note"] = rest
+            await media_status(update, ctx, force_new=True)
             return
-        await asyncio.gather(*(add_link(update, ctx, u) for u in urls))
+        note = rest if len(urls) == 1 and rest else None  # "link + description" in one message
+        await asyncio.gather(*(add_link(update, ctx, u, note) for u in urls))
     elif stage == "narration_edit":
         j["pkg"]["narration"] = text
         j["stage"] = None
@@ -527,14 +639,30 @@ def media_summary(media: list[dict]) -> str:
     return "، ".join(parts) or "هیچ"
 
 
-async def media_status(update, ctx):
+def media_lines(media: list[dict]) -> str:
+    out = []
+    for k, m in enumerate(media, 1):
+        if not m.get("path"):
+            what = "⏳ در حال دانلود"
+        elif m["kind"] == "video":
+            what = f"ویدئو، {m['dur']:.0f} ثانیه"
+        else:
+            what = "عکس"
+        out.append(f"{k}. {what}" + (f" — 📝 {m['note'][:60]}" if m.get("note") else ""))
+    return "\n".join(out[-20:])
+
+
+async def media_status(update, ctx, force_new: bool = False):
     """Keep ONE status message up to date (edit it) instead of replying to every file: avoids flood limits."""
     j, chat = job(ctx), update.effective_chat.id
     pending = j.get("pending", 0)
     text = (f"🎞 دریافت‌شده: {media_summary(j.get('media', []))}"
             + (f"\n⏳ در حال دانلود: {pending} مورد" if pending else "")
-            + "\n\nبعدی را بفرستید یا «✅ تمام شد» را بزنید.")
-    msg_id = j.get("media_msg")
+            + f"\n\n{media_lines(j.get('media', []))}\n\n"
+            "بعدی را بفرستید یا «✅ تمام شد» را بزنید.\n"
+            "💡 بعد از هر لینک یا فایل می‌توانید یک توضیح کوتاه بنویسید (مثلاً «سخنرانی ترامپ») "
+            "تا هوش مصنوعی بهتر بچیند.")
+    msg_id = None if force_new else j.get("media_msg")
     if msg_id:
         try:
             await ctx.bot.edit_message_text(text, chat_id=chat, message_id=msg_id, reply_markup=media_keyboard())
@@ -546,10 +674,10 @@ async def media_status(update, ctx):
     j["media_msg"] = m.message_id
 
 
-async def _collect(update, ctx, label: str, fetch):
+async def _collect(update, ctx, label: str, fetch, note: str | None = None):
     """Reserve a slot (keeps the order the user sent things), fetch the file, then report."""
     j = job(ctx)
-    slot = {"path": None, "id": time.time_ns()}  # unique id: placeholders must never compare equal
+    slot = {"path": None, "id": time.time_ns(), "note": note}  # unique id: placeholders never compare equal
     j.setdefault("media", []).append(slot)
     j["pending"] = j.get("pending", 0) + 1
     await media_status(update, ctx)
@@ -557,7 +685,7 @@ async def _collect(update, ctx, label: str, fetch):
         d = download.fresh_dir(media_root(update) / str(time.time_ns()))
         path, kind = await fetch(d)
         dur = await asyncio.to_thread(download.check_video, path) if kind == "video" else 0.0
-        slot.update(path=str(path), kind=kind, dur=dur)
+        slot.update(path=str(path), kind=kind, dur=dur)  # a description typed while downloading stays on the slot
     except Exception as e:
         log.exception("media fetch failed")
         if slot in j.get("media", []):
@@ -569,10 +697,10 @@ async def _collect(update, ctx, label: str, fetch):
         await media_status(update, ctx)
 
 
-async def add_link(update, ctx, url: str):
+async def add_link(update, ctx, url: str, note: str | None = None):
     async def fetch(d):
         return await asyncio.to_thread(download.download_video, url, d), "video"
-    await _collect(update, ctx, f"ویدئوی این لینک ({url[:60]})", fetch)
+    await _collect(update, ctx, f"ویدئوی این لینک ({url[:60]})", fetch, note)
 
 
 async def on_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -594,7 +722,8 @@ async def on_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f = await att.get_file()
         await f.download_to_drive(path)
         return path, kind
-    await _collect(update, ctx, "فایل (سقف ~۲۰MB؛ فایل بزرگ‌تر را با لینک بفرستید)", fetch)
+    await _collect(update, ctx, "فایل (سقف ~۲۰MB؛ فایل بزرگ‌تر را با لینک بفرستید)", fetch,
+                   (msg.caption or "").strip() or None)
 
 
 async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE):

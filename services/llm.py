@@ -58,3 +58,34 @@ def _anthropic(system, user, search, max_tokens):
             break
         messages.append({"role": "assistant", "content": resp.content})
     return "".join(b.text for b in resp.content if b.type == "text"), []
+
+
+def generate_parts(system: str, parts: list, max_tokens: int = 4000) -> str:
+    """Blocking multimodal call. parts: str (text) or (bytes, mime_type) (image), in order."""
+    import base64
+    if config.LLM_PROVIDER == "gemini":
+        gparts = [{"text": p} if isinstance(p, str)
+                  else {"inlineData": {"mimeType": p[1], "data": base64.b64encode(p[0]).decode()}} for p in parts]
+        body = {"systemInstruction": {"parts": [{"text": system}]},
+                "contents": [{"role": "user", "parts": gparts}],
+                "generationConfig": {"maxOutputTokens": max_tokens + 8000, "temperature": 0.4}}
+        for attempt in range(5):
+            r = httpx.post(GEMINI_URL.format(model=config.GEMINI_MODEL),
+                           headers={"x-goog-api-key": config.GEMINI_API_KEY}, json=body, timeout=240)
+            if r.status_code not in (429, 500, 502, 503) or attempt == 4:
+                break
+            time.sleep(5 * (attempt + 1))
+        r.raise_for_status()
+        cands = r.json().get("candidates") or []
+        if not cands:
+            raise RuntimeError("Gemini returned no candidates: " + str(r.json().get("promptFeedback"))[:300])
+        return "".join(p.get("text", "") for p in cands[0].get("content", {}).get("parts", []))
+    if config.LLM_PROVIDER == "anthropic":
+        import anthropic
+        content = [{"type": "text", "text": p} if isinstance(p, str)
+                   else {"type": "image", "source": {"type": "base64", "media_type": p[1],
+                                                     "data": base64.b64encode(p[0]).decode()}} for p in parts]
+        resp = anthropic.Anthropic().messages.create(model=config.WRITER_MODEL, max_tokens=max_tokens, system=system,
+                                                     messages=[{"role": "user", "content": content}])
+        return "".join(b.text for b in resp.content if b.type == "text")
+    raise RuntimeError(f"Unknown LLM_PROVIDER: {config.LLM_PROVIDER}")

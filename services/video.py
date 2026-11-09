@@ -138,7 +138,7 @@ def plan_durations(media: list[dict], total: float) -> list[float]:
     return [max(d, 0.5) for d in durs]
 
 
-def _segment(m: dict, dur: float, out: Path, w: int, h: int):
+def _segment(m: dict, dur: float, out: Path, w: int, h: int, start: float | None = None):
     enc = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-an", str(out)]
     if m["kind"] == "photo":
         frames = int(dur * 30)
@@ -148,22 +148,30 @@ def _segment(m: dict, dur: float, out: Path, w: int, h: int):
               f":d={frames}:s={w}x{h}:fps=30,setsar=1")
         cmd = ["ffmpeg", "-y", "-i", m["path"], "-vf", vf, "-frames:v", str(frames)] + enc
     else:
-        start = max(0.0, min(1.0, m["dur"] - dur))  # skip the first second (often a logo/black) when possible
+        if start is None:
+            start = max(0.0, min(1.0, m["dur"] - dur))  # skip the first second (often a logo/black) when possible
+        loop = ["-stream_loop", "-1"] if m.get("dur", 0) < dur else []  # clip shorter than its slot: loop it
         vf = f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},setsar=1,fps=30"
-        cmd = ["ffmpeg", "-y", "-ss", f"{start:.2f}", "-t", f"{dur:.2f}", "-i", m["path"], "-vf", vf] + enc
+        cmd = ["ffmpeg", "-y"] + loop + ["-ss", f"{start:.2f}", "-i", m["path"], "-t", f"{dur:.2f}", "-vf", vf] + enc
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         raise RuntimeError(f"ffmpeg failed on {Path(m['path']).name}:\n" + r.stderr[-800:])
 
 
-def build_montage(media: list[dict], total: float, work: Path, fmt: str = "9x16") -> Path:
-    """media: [{'path', 'kind': 'video'|'photo', 'dur'}] in the order the user sent them."""
+def build_montage(media: list[dict], total: float, work: Path, fmt: str = "9x16", segs: list[dict] | None = None) -> Path:
+    """media: [{'path', 'kind': 'video'|'photo', 'dur'}] in the order the user sent them.
+
+    segs (optional, from the AI edit plan): [{'item': index, 'start': s, 'dur': d}] in timeline order. Without it,
+    every item is used once, in order, with a fair share of the time.
+    """
     f = FORMATS[fmt]
     work.mkdir(parents=True, exist_ok=True)
+    if segs is None:
+        segs = [{"item": k, "start": None, "dur": d} for k, d in enumerate(plan_durations(media, total))]
     parts = []
-    for k, (m, d) in enumerate(zip(media, plan_durations(media, total))):
+    for k, sg in enumerate(segs):
         seg = work / f"seg_{k:02d}.mp4"
-        _segment(m, d, seg, f["w"], f["h"])
+        _segment(media[sg["item"]], sg["dur"], seg, f["w"], f["h"], sg.get("start"))
         parts.append(seg)
     listing = work / "segments.txt"
     listing.write_text("".join(f"file '{p.resolve().as_posix()}'\n" for p in parts), encoding="utf-8")
