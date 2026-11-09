@@ -34,6 +34,29 @@ def synthesize(text: str, out_path: Path) -> Path:
             time.sleep(5 * (attempt + 1))
             continue
         break
-    r.raise_for_status()
+    if r.status_code >= 400:
+        raise RuntimeError(_explain(r))
     out_path.write_bytes(r.content)
     return out_path
+
+
+HINTS = {
+    "quota_exceeded": "اعتبار (کاراکتر) حساب ElevenLabs تمام شده؛ پلن را شارژ/ارتقا دهید یا تا تمدید ماهانه صبر کنید.",
+    "invalid_api_key": "کلید ELEVENLABS_API_KEY در فایل .env اشتباه است یا حذف شده؛ یک کلید جدید بسازید و جایگزین کنید.",
+    "missing_permissions": "کلید ElevenLabs اجازه‌ی Text to Speech ندارد؛ در تنظیمات کلید، دسترسی Text to Speech را روشن کنید.",
+    "detected_unusual_activity": "ElevenLabs حساب رایگان را به خاطر «فعالیت غیرعادی» (مثلاً VPN) محدود کرده؛ بدون VPN امتحان کنید یا پلن پولی بگیرید.",
+    "voice_not_found": "صدای ELEVENLABS_VOICE_ID پیدا نشد؛ شناسه‌ی صدا در .env را چک کنید.",
+}
+
+
+def _explain(r) -> str:
+    """ElevenLabs' own reason for an error, plus what to do about it."""
+    try:
+        detail = r.json().get("detail", {})
+    except Exception:
+        detail = {}
+    if isinstance(detail, str):
+        detail = {"message": detail}
+    status, msg = detail.get("status", ""), detail.get("message", "") or r.text[:300]
+    hint = HINTS.get(status, "")
+    return f"ElevenLabs خطای {r.status_code} داد ({status or 'بدون کد'}): {msg}" + (f"\n👉 {hint}" if hint else "")
