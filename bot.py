@@ -209,8 +209,11 @@ async def cmd_bulletin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         st = b["stats"]
         note = f"\n⚠️ فیدهای ناموفق: {', '.join(b['errors'])}" if b["errors"] else ""
         note += f"\n⚠️ این بخش‌ها نوشته نشدند: {', '.join(b['failed'])}" if b["failed"] else ""
+        if st["sorted"] < st["items"]:
+            note += (f"\n⚠️ {st['items'] - st['sorted']} خبر دسته‌بندی نشد و در بولتن نیامد"
+                     + (f" ({b['class_errors'][0][:150]})" if b["class_errors"] else ""))
         await update.message.reply_text(
-            f"✅ بولتن آماده شد ({st['items']} خبر در {st['hours']} ساعت اخیر، {st['used']} خبر در بخش‌ها):\n{counts}"
+            f"✅ بولتن آماده شد ({st['items']} خبر در {st['hours']} ساعت اخیر، {st['used']} خبر مرتبط در بخش‌ها):\n{counts}"
             f"{note}\n\nقبل از انتشار حتماً بازبینی کنید؛ فایل دوم زیر هر خبر لینک منبع را دارد.")
         with clean.open("rb") as f:
             await ctx.bot.send_document(chat, f, filename=clean.name, caption="🗞 بولتن (برای انتشار)")

@@ -1,4 +1,5 @@
 """Provider-agnostic LLM call. LLM_PROVIDER = gemini (free tier) | anthropic."""
+import threading
 import time
 
 import httpx
@@ -17,6 +18,49 @@ def generate(system: str, user: str, search: bool = False, max_tokens: int = 400
     raise RuntimeError(f"Unknown LLM_PROVIDER: {config.LLM_PROVIDER}")
 
 
+_pace_lock = threading.Lock()
+_last_call = [0.0]
+
+
+def _gemini_post(body: dict, timeout: int = 180) -> httpx.Response:
+    """POST to Gemini, paced under the free-tier requests-per-minute limit, retrying 429/5xx.
+
+    On 429 Gemini says how long to wait (RetryInfo.retryDelay); we wait that long instead of guessing.
+    """
+    gap = 60.0 / max(1, config.GEMINI_RPM)
+    r = None
+    for attempt in range(6):
+        with _pace_lock:  # calls from parallel threads queue up here
+            wait = _last_call[0] + gap - time.monotonic()
+            if wait > 0:
+                time.sleep(wait)
+            _last_call[0] = time.monotonic()
+        r = httpx.post(GEMINI_URL.format(model=config.GEMINI_MODEL),
+                       headers={"x-goog-api-key": config.GEMINI_API_KEY},  # proxy-injected secret may overwrite this
+                       json=body, timeout=timeout)
+        if r.status_code not in (429, 500, 502, 503, 504) or attempt == 5:
+            break
+        delay = 5.0 * (attempt + 1)
+        try:
+            for d in r.json().get("error", {}).get("details", []):
+                if str(d.get("@type", "")).endswith("RetryInfo"):
+                    delay = float(str(d.get("retryDelay", "")).rstrip("s") or delay) + 1
+        except Exception:
+            pass
+        time.sleep(min(delay, 65))
+    if r.status_code == 429:
+        raise RuntimeError("سهمیه‌ی Gemini پر شده (429): " + _gemini_error(r))
+    r.raise_for_status()
+    return r
+
+
+def _gemini_error(r) -> str:
+    try:
+        return str(r.json().get("error", {}).get("message", ""))[:300]
+    except Exception:
+        return r.text[:300]
+
+
 def _gemini(system, user, search, max_tokens):
     body = {
         "systemInstruction": {"parts": [{"text": system}]},
@@ -26,15 +70,7 @@ def _gemini(system, user, search, max_tokens):
     }
     if search:
         body["tools"] = [{"google_search": {}}]
-    for attempt in range(5):  # preview models often return transient 429/502/503
-        r = httpx.post(
-            GEMINI_URL.format(model=config.GEMINI_MODEL),
-            headers={"x-goog-api-key": config.GEMINI_API_KEY},  # proxy-injected secret may overwrite this
-            json=body, timeout=180)
-        if r.status_code not in (429, 502, 503) or attempt == 4:
-            break
-        time.sleep(4 * (attempt + 1))
-    r.raise_for_status()
+    r = _gemini_post(body)
     data = r.json()
     cands = data.get("candidates") or []
     if not cands:
@@ -69,13 +105,7 @@ def generate_parts(system: str, parts: list, max_tokens: int = 4000) -> str:
         body = {"systemInstruction": {"parts": [{"text": system}]},
                 "contents": [{"role": "user", "parts": gparts}],
                 "generationConfig": {"maxOutputTokens": max_tokens + 8000, "temperature": 0.4}}
-        for attempt in range(5):
-            r = httpx.post(GEMINI_URL.format(model=config.GEMINI_MODEL),
-                           headers={"x-goog-api-key": config.GEMINI_API_KEY}, json=body, timeout=240)
-            if r.status_code not in (429, 500, 502, 503) or attempt == 4:
-                break
-            time.sleep(5 * (attempt + 1))
-        r.raise_for_status()
+        r = _gemini_post(body, timeout=240)
         cands = r.json().get("candidates") or []
         if not cands:
             raise RuntimeError("Gemini returned no candidates: " + str(r.json().get("promptFeedback"))[:300])

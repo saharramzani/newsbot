@@ -17,7 +17,7 @@ from services.sources_fa import source_fa
 ROOT = Path(__file__).parent.parent
 SECTIONS_FILE = ROOT / "prompts" / "bulletin_sections.txt"
 STYLE = (ROOT / "prompts" / "bulletin_style.md").read_text(encoding="utf-8")
-CLASSIFY_BATCH = 80
+CLASSIFY_BATCH = 120  # items per sorting request (fewer requests = less rate limiting)
 MAX_PER_SECTION = 40       # items handed to the writer per section (newest first)
 MAX_ENTRIES = 12           # entries written per section
 
@@ -83,7 +83,7 @@ async def collect(hours: int) -> tuple[list[dict], list[str]]:
     return out, errors
 
 
-async def classify(items: list[dict], sections: list[dict]) -> dict[int, str]:
+async def classify(items: list[dict], sections: list[dict]) -> tuple[dict[int, str], list[str]]:
     sec_text = "\n".join(f"- {s['key']}: {s['desc']}" for s in sections)
     keys = {s["key"] for s in sections}
     sem = asyncio.Semaphore(3)
@@ -92,16 +92,22 @@ async def classify(items: list[dict], sections: list[dict]) -> dict[int, str]:
         part = items[start:start + CLASSIFY_BATCH]
         listing = "\n".join(f"{start + k}. [{source_fa(i)}] {i['title']} — {i['snippet'][:200]}" for k, i in enumerate(part))
         async with sem:
-            try:
-                text, _ = await asyncio.to_thread(llm.generate, CLASSIFY.format(sections=sec_text), listing, False, 4000)
-                return {p["id"]: p["section"] for p in _json_array(text)
-                        if isinstance(p, dict) and isinstance(p.get("id"), int) and p.get("section") in keys}
-            except Exception:
-                return {}
-    result = {}
-    for part in await asyncio.gather(*(batch(s) for s in range(0, len(items), CLASSIFY_BATCH))):
+            for attempt in range(2):  # a failed batch is retried once; it is never silently dropped
+                try:
+                    text, _ = await asyncio.to_thread(llm.generate, CLASSIFY.format(sections=sec_text), listing, False,
+                                                      6000)
+                    got = {p["id"]: p["section"] for p in _json_array(text)
+                           if isinstance(p, dict) and isinstance(p.get("id"), int) and p.get("section") in keys | {"skip"}}
+                    return got, None
+                except Exception as e:
+                    err = str(e)[:200]
+            return {}, err
+    result, errors = {}, []
+    for part, err in await asyncio.gather(*(batch(s) for s in range(0, len(items), CLASSIFY_BATCH))):
         result.update(part)
-    return result
+        if err:
+            errors.append(err)
+    return result, errors
 
 
 async def write_section(section: dict, items: list[tuple[int, dict]]) -> list[dict]:
@@ -127,7 +133,9 @@ async def build(hours: int | None = None) -> dict:
     items, errors = await collect(hours)
     if not items:
         raise RuntimeError("هیچ خبری از فیدها دریافت نشد. فیدهای ناموفق: " + ", ".join(errors or ["—"]))
-    where = await classify(items, sections)
+    where, class_errors = await classify(items, sections)
+    if not where:
+        raise RuntimeError("دسته‌بندی خبرها با هوش مصنوعی انجام نشد: " + "؛ ".join(class_errors or ["پاسخ خالی"]))
     sem = asyncio.Semaphore(3)
 
     async def one(sec):
@@ -137,8 +145,11 @@ async def build(hours: int | None = None) -> dict:
         async with sem:
             try:
                 return sec, await write_section(sec, mine), None
-            except Exception as e:
-                return sec, [], str(e)[:200]
+            except Exception:
+                try:  # one retry (usually a rate-limit hiccup)
+                    return sec, await write_section(sec, mine), None
+                except Exception as e:
+                    return sec, [], str(e)[:200]
     out_sections, failed = [], []
     for sec, entries, err in await asyncio.gather(*(one(s) for s in sections)):
         if err:
@@ -147,5 +158,7 @@ async def build(hours: int | None = None) -> dict:
             for e in entries:
                 e["links"] = [(source_fa(items[k]), items[k]["url"]) for k in e.pop("ids")]
             out_sections.append({"title": sec["title"], "entries": entries})
-    return {"sections": out_sections, "errors": errors, "failed": failed,
-            "stats": {"items": len(items), "used": len(where), "hours": hours}}
+    sorted_n = len(where)
+    used = sum(1 for v in where.values() if v != "skip")
+    return {"sections": out_sections, "errors": errors, "failed": failed, "class_errors": class_errors,
+            "stats": {"items": len(items), "sorted": sorted_n, "used": used, "hours": hours}}
