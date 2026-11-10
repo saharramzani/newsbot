@@ -42,7 +42,7 @@ def news_keyboard(items, selected, page=0):
     pages = max(1, -(-len(items) // PAGE))
     page = min(max(page, 0), pages - 1)
     start = page * PAGE
-    rows = [[Btn(("✅ " if i in selected else "⬜ ") + ("⭐" if items[i].get("relevant") else "")
+    rows = [[Btn(("✅ " if i in selected else "⬜ ") + mark(items[i])
                  + f"{i + 1}. {items[i]['title_fa'][:44]}", callback_data=f"sel:{i}")]
             for i in range(start, min(start + PAGE, len(items)))]
     if pages > 1:
@@ -53,12 +53,37 @@ def news_keyboard(items, selected, page=0):
     return Markup(rows)
 
 
-def format_news(items) -> str:
-    out = [f"📰 همه‌ی {len(items)} خبر (جدیدترین اول؛ ⭐ = مرتبط با موضوعات اصلی)\n"]
+def mark(item) -> str:
+    imp = item.get("importance", 0)
+    return "🔥" if imp >= 5 else "⭐" if imp == 4 else ""
+
+
+def format_news(items, all_view: bool = False) -> str:
+    head = (f"📋 همه‌ی {len(items)} خبر (🔥 = خیلی مهم، ⭐ = مهم)" if all_view
+            else f"📰 {len(items)} خبر مهم (مهم‌ترین اول؛ 🔥 = خیلی مهم)")
+    out = [head + "\n"]
     for i, it in enumerate(items, 1):
-        star = "⭐ " if it.get("relevant") else ""
-        out.append(f"{i}. {star}{it['title_fa']}\n   {it['source']} | {it.get('hours_ago_estimate', '?')}\n   {it['url']}\n")
+        m = mark(it)
+        also = f" (+{len(it['also'])} منبع دیگر)" if it.get("also") else ""
+        out.append(f"{i}. {m + ' ' if m else ''}{it['title_fa']}\n   {it['source']}{also} | {it.get('hours_ago_estimate', '?')}"
+                   f"\n   {it['url']}\n")
     return "\n".join(out)
+
+
+async def show_news(update, ctx, all_view: bool = False):
+    j = job(ctx)
+    items = j["all_items"] if all_view else [i for i in j["all_items"] if i.get("relevant")]
+    j.update(items=items, selected=set(), page=0)
+    chat = update.effective_chat.id
+    if not items:
+        await ctx.bot.send_message(chat, "در این بازه خبر مهمی پیدا نشد.", reply_markup=Markup(
+            [[Btn(f"📋 نمایش همه ({len(j['all_items'])} خبر)", callback_data="news_all")]]))
+        return
+    await say(update, ctx, format_news(items, all_view))
+    kb = news_keyboard(items, j["selected"])
+    if not all_view and len(j["all_items"]) > len(items):
+        kb = Markup(list(kb.inline_keyboard) + [[Btn(f"📋 نمایش همه ({len(j['all_items'])} خبر)", callback_data="news_all")]])
+    await ctx.bot.send_message(chat, "کدام خبرها؟", reply_markup=kb)
 
 
 def final_caption(pkg: dict, item: dict, limit: int = 2200) -> str:
@@ -161,7 +186,7 @@ async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_news(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data["job"] = {}
-    await update.message.reply_text("🔎 در حال جمع‌آوری همه‌ی اخبار و ترجمه‌ی تیترها… (۱ تا ۳ دقیقه)")
+    await update.message.reply_text("🔎 در حال جمع‌آوری اخبار و انتخاب خبرهای مهم… (۱ تا ۳ دقیقه)")
     try:
         items, sources = await find_news()
     except Exception as e:
@@ -169,11 +194,10 @@ async def cmd_news(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ جست‌وجو شکست خورد:\n{e}")
         return
     j = job(ctx)
-    j.update(items=items, selected=set(), page=0)
-    await say(update, ctx, format_news(items))
+    j["all_items"] = items
     if sources:
         await say(update, ctx, "\n".join(f"ℹ️ {s['title']} {s['uri']}".strip() for s in sources[:12]))
-    await ctx.bot.send_message(update.effective_chat.id, "کدام خبرها؟", reply_markup=news_keyboard(items, j["selected"]))
+    await show_news(update, ctx)
 
 
 # ---------- daily bulletin ----------
@@ -581,6 +605,8 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_reply_markup(news_keyboard(j["items"], j["selected"], j["page"]))
     elif d == "noop":
         pass
+    elif d == "news_all" and j.get("all_items"):
+        await show_news(update, ctx, all_view=True)
     elif d == "go":
         if not j.get("selected"):
             await q.answer("حداقل یک خبر انتخاب کنید", show_alert=True)

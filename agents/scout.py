@@ -41,16 +41,30 @@ def load_topics() -> str:
     return "\n".join(f"- {l}" for l in lines if l and not l.startswith("#"))
 
 
-SYSTEM = """You translate news headlines for Avaye Naft, a Persian-language news outlet specialised in oil and energy.
+FILTER_FILE = Path(__file__).parent.parent / "prompts" / "news_filter.md"
+
+
+def load_filter() -> str:
+    return "\n".join(l for l in FILTER_FILE.read_text(encoding="utf-8").splitlines() if l.strip() and not l.startswith("#"))
+
+
+SYSTEM = """You are the news editor of Avaye Naft, a Persian-language outlet specialised in oil and energy.
 Its core topics are:
 {topics}
 
 You get a numbered list of news items (source, headline, snippet). For EVERY item (do not skip any):
 - title_fa: a short, faithful Persian headline. Use ONLY the given text; never add facts. Persian items: keep or tidy the title.
-- relevant: true if the item clearly fits the core topics above, else false.
+- importance: an integer 1-5 for how important the item is for THIS outlet, using exactly this scale:
+{scale}
+Be strict: most items are 3 or lower. Routine price quotes, local incidents and administrative notices are never 4-5,
+even when they mention the dollar, oil or energy. Analysis of WHY something moves, and decisions that change markets or
+the war/geopolitical situation, are what earn 4-5.
+
+- event: a short English slug naming the underlying event (e.g. "us-jets-leave-uk-base"); items that report the SAME
+  event must get the SAME slug, so duplicates can be merged.
 
 Reply with ONLY a JSON array (no markdown fence), one element per item, same ids:
-[{{"id": <number>, "title_fa": "...", "relevant": true}}]"""
+[{{"id": <number>, "title_fa": "...", "importance": 3, "event": "..."}}]"""
 
 
 def _text(el, *names):
@@ -143,7 +157,8 @@ def _extract_json(text: str):
 
 async def _translate(batch: list[dict], offset: int, topics: str) -> dict[int, dict]:
     listing = "\n".join(f"{offset + k}. [{i['source']}] {i['title']} — {i['snippet'][:160]}" for k, i in enumerate(batch))
-    text, _ = await asyncio.to_thread(llm.generate, SYSTEM.format(topics=topics), listing, False, 6000)
+    text, _ = await asyncio.to_thread(llm.generate, SYSTEM.format(topics=topics, scale=load_filter()), listing,
+                                      False, 6000)
     return {p["id"]: p for p in _extract_json(text) if isinstance(p, dict) and isinstance(p.get("id"), int)}
 
 
@@ -195,10 +210,32 @@ async def find_news(hours: int | None = None) -> tuple[list[dict], list[dict]]:
             "published": src["published"].strftime("%Y-%m-%d %H:%M UTC"),
             "hours_ago_estimate": f"{age:.0f} ساعت پیش", "time_confidence": "high",
             "url": src["url"], "summary_fa": "", "snippet": src["snippet"],
-            "relevant": bool(t.get("relevant", False)),
+            "importance": int(t["importance"]) if isinstance(t.get("importance"), (int, float)) else 0,
+            "event": str(t.get("event", "")).strip().lower(), "also": [],
         })
-    notes = [{"title": f"بازه‌ی جست‌وجو: {window} ساعت اخیر؛ همه‌ی {len(out)} خبر از {n_feeds - len(errors)} فید"
-                       f" (⭐ = مرتبط با موضوعات اصلی)", "uri": ""}]
+    # one item per event: keep the highest-scored (then most detailed) report, remember the other sources
+    best = {}
+    for i in out:
+        if not i["event"]:
+            continue
+        b = best.get(i["event"])
+        if b is None or (i["importance"], len(i["snippet"])) > (b["importance"], len(b["snippet"])):
+            best[i["event"]] = i
+    merged = []
+    for i in out:
+        b = best.get(i["event"]) if i["event"] else None
+        if b is not None and b is not i:
+            b["also"].append(i["source"])
+        else:
+            merged.append(i)
+    out = merged
+    # most important first, newest first within the same score; untranslated items (score 0) stay visible in "show all"
+    out.sort(key=lambda i: -i["importance"])
+    for i in out:
+        i["relevant"] = i["importance"] >= config.NEWS_MIN_IMPORTANCE
+    n_imp = sum(1 for i in out if i["relevant"])
+    notes = [{"title": f"بازه‌ی جست‌وجو: {window} ساعت اخیر؛ از {len(out)} خبر ({n_feeds - len(errors)} فید)، "
+                       f"{n_imp} خبر مهم انتخاب شد (نمره‌ی اهمیت {config.NEWS_MIN_IMPORTANCE} از ۵ یا بیشتر)", "uri": ""}]
     if len(translated) < len(recent):
         notes.append({"title": f"⚠️ {len(recent) - len(translated)} تیتر ترجمه نشد و به زبان اصلی آمده", "uri": ""})
     if errors:
