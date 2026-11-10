@@ -3,6 +3,7 @@
 Nothing advances without an explicit button press / message from the user.
 """
 import asyncio
+from datetime import datetime, timedelta, timezone
 import logging
 import re
 import shutil
@@ -15,9 +16,11 @@ from telegram.ext import (AIORateLimiter, Application, CallbackQueryHandler, Com
                           MessageHandler, PicklePersistence, filters)
 
 import config
+from agents import bulletin
 from agents.scout import find_news
 from agents.writer import write_package
-from services import cover, download, editor, stt, tts, video
+from services import cover, docx_out, download, editor, stt, tts, video
+from services.sources_fa import source_fa
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 # httpx logs full URLs at INFO level, and Telegram URLs contain the bot token
@@ -56,22 +59,6 @@ def format_news(items) -> str:
         star = "⭐ " if it.get("relevant") else ""
         out.append(f"{i}. {star}{it['title_fa']}\n   {it['source']} | {it.get('hours_ago_estimate', '?')}\n   {it['url']}\n")
     return "\n".join(out)
-
-
-# Persian names of the outlets, for the source line in captions (prefix match on the feed name)
-SOURCE_FA = [("Bloomberg", "بلومبرگ"), ("Reuters", "رویترز"), ("Financial Times", "فایننشال تایمز"),
-             ("Wall Street Journal", "وال‌استریت ژورنال"), ("Asharq Al-Awsat", "الشرق الاوسط"), ("Asharq", "الشرق"),
-             ("Foreign Policy", "فارن پالیسی"), ("Al Jazeera", "الجزیره"), ("OilPrice", "اویل‌پرایس"),
-             ("The Guardian", "گاردین"), ("BBC Persian", "بی‌بی‌سی فارسی"), ("BBC", "بی‌بی‌سی"),
-             ("New York Times", "نیویورک تایمز")]
-
-
-def source_fa(item: dict) -> str:
-    name = item.get("source", "")
-    for prefix, fa in SOURCE_FA:
-        if name.startswith(prefix):
-            return fa
-    return re.sub(r"\s*\(.*?\)\s*$", "", name).strip()  # e.g. "دنیای اقتصاد (Google News)" -> "دنیای اقتصاد"
 
 
 def final_caption(pkg: dict, item: dict, limit: int = 2200) -> str:
@@ -163,7 +150,8 @@ async def say(update_or_q, ctx, text, markup=None):
 
 # ---------- commands ----------
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("سلام 👋\n/news ← جست‌وجوی تیترهای ۱۲ ساعت اخیر\n/cancel ← لغو کار جاری")
+    await update.message.reply_text("سلام 👋\n/news ← جست‌وجوی تیترهای ۱۲ ساعت اخیر\n"
+                                    "/bulletin ← ساخت بولتن خبری (فایل Word)\n/cancel ← لغو کار جاری")
 
 
 async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -186,6 +174,50 @@ async def cmd_news(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if sources:
         await say(update, ctx, "\n".join(f"ℹ️ {s['title']} {s['uri']}".strip() for s in sources[:12]))
     await ctx.bot.send_message(update.effective_chat.id, "کدام خبرها؟", reply_markup=news_keyboard(items, j["selected"]))
+
+
+# ---------- daily bulletin ----------
+TEHRAN = timezone(timedelta(hours=3, minutes=30))
+
+
+async def cmd_bulletin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat.id
+    if ctx.chat_data.get("bulletin_running"):
+        await update.message.reply_text("⏳ یک بولتن در حال ساخت است؛ صبر کنید.")
+        return
+    ctx.chat_data["bulletin_running"] = True
+    try:
+        await update.message.reply_text(f"🗞 در حال جمع‌آوری خبرهای {config.BULLETIN_HOURS} ساعت اخیر و نوشتن بولتن… "
+                                        "(چند دقیقه)")
+        try:
+            b = await bulletin.build()
+        except Exception as e:
+            log.exception("bulletin failed")
+            await update.message.reply_text(f"❌ ساخت بولتن شکست خورد:\n{e}")
+            return
+        if not b["sections"]:
+            await update.message.reply_text("هیچ خبری برای بخش‌های بولتن پیدا نشد.")
+            return
+        when = datetime.now(TEHRAN)
+        folder = config.WORK_DIR / "bulletins"
+        folder.mkdir(parents=True, exist_ok=True)
+        jy, jm, jd = docx_out.to_jalali(when.year, when.month, when.day)
+        stem = f"bulletin_{jy}-{jm:02d}-{jd:02d}_{when:%H%M}"
+        clean = docx_out.write(b, folder / f"{stem}.docx", when)
+        review = docx_out.write(b, folder / f"{stem}_links.docx", when, with_links=True)
+        counts = "\n".join(f"• {s['title']}: {len(s['entries'])}" for s in b["sections"])
+        st = b["stats"]
+        note = f"\n⚠️ فیدهای ناموفق: {', '.join(b['errors'])}" if b["errors"] else ""
+        note += f"\n⚠️ این بخش‌ها نوشته نشدند: {', '.join(b['failed'])}" if b["failed"] else ""
+        await update.message.reply_text(
+            f"✅ بولتن آماده شد ({st['items']} خبر در {st['hours']} ساعت اخیر، {st['used']} خبر در بخش‌ها):\n{counts}"
+            f"{note}\n\nقبل از انتشار حتماً بازبینی کنید؛ فایل دوم زیر هر خبر لینک منبع را دارد.")
+        with clean.open("rb") as f:
+            await ctx.bot.send_document(chat, f, filename=clean.name, caption="🗞 بولتن (برای انتشار)")
+        with review.open("rb") as f:
+            await ctx.bot.send_document(chat, f, filename=review.name, caption="🔗 نسخه‌ی بازبینی با لینک منابع")
+    finally:
+        ctx.chat_data["bulletin_running"] = False
 
 
 # ---------- pipeline steps ----------
@@ -774,6 +806,7 @@ def main():
     app.add_handler(CommandHandler("start", cmd_start, filters=allowed))
     app.add_handler(CommandHandler("news", cmd_news, filters=allowed))
     app.add_handler(CommandHandler("cancel", cmd_cancel, filters=allowed))
+    app.add_handler(CommandHandler("bulletin", cmd_bulletin, filters=allowed))
     app.add_handler(MessageHandler(allowed & (filters.VIDEO | filters.ANIMATION | filters.PHOTO | filters.Document.VIDEO
                                               | filters.Document.IMAGE), on_media))
     app.add_handler(MessageHandler(allowed & filters.TEXT & ~filters.COMMAND, on_text))

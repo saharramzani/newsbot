@@ -6,3 +6,4 @@ av>=14,<17  # newer PyAV breaks faster-whisper
 yt-dlp
 pillow  # measuring headline width for covers
 edge-tts  # free fallback voice when ElevenLabs credits run out
+python-docx  # Word bulletin

@@ -30,6 +30,8 @@ EDGE_RATE = get("EDGE_RATE", "+5%")
 LOGO_PATH = get("LOGO_PATH", "assets/logo.png")
 SUBTITLE_FONT = get("SUBTITLE_FONT", "Vazirmatn")
 NEWS_WINDOW_HOURS = int(get("NEWS_WINDOW_HOURS", "12"))
+BULLETIN_HOURS = int(get("BULLETIN_HOURS", "24"))     # news window of the /bulletin command
+BULLETIN_FONT = get("BULLETIN_FONT", "B Nazanin")     # font of the Word bulletin
 ALLOWED_USER_IDS = {int(x) for x in get("ALLOWED_USER_IDS", "").split(",") if x.strip()}
 WORK_DIR = Path(get("WORK_DIR", "work"))
 
