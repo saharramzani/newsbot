@@ -24,6 +24,8 @@ GEMINI_RPM = int(get("GEMINI_RPM", "9"))  # requests per minute we allow ourselv
 SCOUT_MODEL = get("SCOUT_MODEL", "claude-opus-5-5")
 WRITER_MODEL = get("WRITER_MODEL", "claude-opus-5-5")
 WHISPER_MODEL = get("WHISPER_MODEL", "small")
+# main voice: "elevenlabs" (paid, best) or "edge" (free Microsoft voice; e.g. for a day of testing)
+TTS_ENGINE = get("TTS_ENGINE", "elevenlabs").lower()
 # free fallback voice when ElevenLabs credits run out: "edge" (Microsoft Edge TTS, no key) or "none"
 FALLBACK_TTS = get("FALLBACK_TTS", "edge").lower()
 EDGE_VOICE = get("EDGE_VOICE", "fa-IR-FaridNeural")  # or fa-IR-DilaraNeural (female)

@@ -29,9 +29,14 @@ def synthesize(text: str, out_path: Path) -> Path:
     return synthesize_with_info(text, out_path)[0]
 
 
-def synthesize_with_info(text: str, out_path: Path) -> tuple[Path, str]:
+def synthesize_with_info(text: str, out_path: Path, engine: str | None = None) -> tuple[Path, str]:
     """ElevenLabs first; if its credits run out (or the key stops working) and a fallback is configured, use the
-    free Microsoft Edge voice. Returns (path, engine) with engine 'elevenlabs' or 'edge'."""
+    free Microsoft Edge voice. Returns (path, engine) with engine 'elevenlabs' or 'edge'.
+
+    engine='edge' (a free preview) or TTS_ENGINE=edge in .env skips ElevenLabs entirely: no credits are used.
+    """
+    if (engine or config.TTS_ENGINE) == "edge":
+        return _edge(text, out_path), "edge"
     try:
         return _elevenlabs(text, out_path), "elevenlabs"
     except ElevenLabsError as e:

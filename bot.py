@@ -253,8 +253,12 @@ async def ask_narration_approval(update, ctx):
     j["narration"] = j["pkg"]["narration"]
     await ctx.bot.send_message(
         update.effective_chat.id,
-        "🎙 متن نهایی نریشن (این متن به ElevenLabs داده می‌شود):\n\n" + j["narration"],
+        "🎙 متن نهایی نریشن (این متن به ElevenLabs داده می‌شود):\n\n" + j["narration"]
+        + f"\n\n({len(j['narration'])} کاراکتر ≈ همین‌قدر اعتبار ElevenLabs)\n"
+        "🧪 «پیش‌نمایش رایگان» ویدئو را با صدای رایگان می‌سازد تا بدون خرج اعتبار ببینید؛ بعد ساخت نهایی را بزنید.",
         reply_markup=Markup([[Btn("✅ ساخت " + f["label"], callback_data=f"nar_ok:{k}") for k, f in video.FORMATS.items()],
+                             [Btn("🧪 پیش‌نمایش رایگان " + f["label"], callback_data=f"nar_test:{k}")
+                              for k, f in video.FORMATS.items()],
                              [Btn("✏️ ویرایش متن", callback_data="nar_edit")]]))
 
 
@@ -280,7 +284,8 @@ def _prepare(j):
     prep = j["prep"]
     work = Path(prep["work"])
     work.mkdir(parents=True, exist_ok=True)
-    audio, engine = _step("ساخت صدا", tts.synthesize_with_info, j["narration"], work / "narration.mp3")
+    audio, engine = _step("ساخت صدا", tts.synthesize_with_info, j["narration"], work / "narration.mp3",
+                          "edge" if j.get("preview") else None)
     prep["voice_engine"] = engine
     spoken = _step("زمان‌بندی زیرنویس با Whisper", stt.transcribe_words, audio)
     words = stt.align_to_script(j["narration"], spoken)
@@ -337,7 +342,10 @@ async def produce(update, ctx):
     """Voice (cached: never paid twice for the same text) + timings, then the final render."""
     j = job(ctx)
     chat = update.effective_chat.id
-    if not (j["prep"].get("audio") and Path(j["prep"]["audio"]).exists()):
+    prep = j["prep"]
+    wrong_voice = not j.get("preview") and prep.get("voice_engine") == "edge" and config.TTS_ENGINE != "edge" \
+        and not prep.get("edge_fallback_ok")
+    if wrong_voice or not (prep.get("audio") and Path(prep["audio"]).exists()):
         await ctx.bot.send_message(chat, "⚙️ ساخت نریشن و زمان‌بندی زیرنویس…")
         try:
             await asyncio.to_thread(_prepare, j)
@@ -346,7 +354,8 @@ async def produce(update, ctx):
             await ctx.bot.send_message(chat, f"❌ ساخت ویدئو شکست خورد:\n{e}\n\nبرای تلاش دوباره، دکمه‌ی زیر را بزنید.",
                                        reply_markup=Markup([[Btn("🔁 دوباره امتحان کن", callback_data="plan_ok")]]))
             return
-        if j["prep"].get("voice_engine") == "edge":
+        if j["prep"].get("voice_engine") == "edge" and not j.get("preview") and config.TTS_ENGINE != "edge":
+            j["prep"]["edge_fallback_ok"] = True  # ElevenLabs refused (credits/key): do not retry it on every press
             await ctx.bot.send_message(chat, "ℹ️ اعتبار ElevenLabs تمام شده (یا کلیدش کار نمی‌کند)؛ این بار از صدای "
                                              "رایگان مایکروسافت استفاده شد. بعد از شارژ ElevenLabs خودکار به صدای اصلی برمی‌گردد.")
     await render_and_send(update, ctx)
@@ -401,6 +410,24 @@ async def render_and_send(update, ctx):
         log.exception("render failed")
         await ctx.bot.send_message(chat, f"❌ ساخت ویدئو شکست خورد:\n{e}\n\nبرای تلاش دوباره، دکمه‌ی زیر را بزنید.",
                                    reply_markup=Markup([[Btn("🔁 دوباره تدوین کن", callback_data="plan_ok")]]))
+        return
+    if j.get("preview"):  # free preview: show it, keep everything, offer the paid final build
+        if out.stat().st_size > video.TELEGRAM_MAX_BYTES:
+            await asyncio.to_thread(video.shrink, out)
+        try:
+            with out.open("rb") as f:
+                size = video.FORMATS[j["prep"]["fmt"]]
+                await ctx.bot.send_video(chat, f, supports_streaming=True, width=size["w"], height=size["h"],
+                                         caption="🧪 پیش‌نمایش با صدای رایگان (بدون خرج اعتبار ElevenLabs)")
+        except Exception as e:
+            log.exception("preview upload failed")
+            await ctx.bot.send_message(chat, f"⚠️ ارسال پیش‌نمایش شکست خورد: {e}")
+        rows = [[Btn(f"✅ ساخت نهایی با ElevenLabs ({len(j['narration'])} کاراکتر)", callback_data="final_ok")],
+                [Btn("✏️ ویرایش متن نریشن", callback_data="nar_edit")]]
+        if j["prep"].get("plan"):
+            rows.insert(1, [Btn("✏️ تغییر نقشه‌ی تدوین", callback_data="plan_edit")])
+        await ctx.bot.send_message(chat, "اگر راضی هستید ساخت نهایی را بزنید؛ نقشه‌ی تدوین همین می‌ماند و فقط صدا عوض "
+                                         "می‌شود.", reply_markup=Markup(rows))
         return
     work = Path(j["prep"]["work"])
     j["prep"] = None
@@ -512,8 +539,8 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     j, d = job(ctx), q.data
     # state is lost if the bot restarted, or the button belongs to an older round
     needs = {"go": "items", "pkg_redo": "current", "pkg_fb": "current", "pkg_ok": "pkg", "skip": "queue",
-             "nar_edit": "pkg", "nar_ok": "src"}
-    key = d.split(":")[0] if d.startswith("nar_ok") else d
+             "nar_edit": "pkg", "nar_ok": "src", "nar_test": "src"}
+    key = d.split(":")[0] if d.startswith(("nar_ok", "nar_test")) else d
     if (d.startswith(("sel:", "pg:")) and not j.get("items")) or (key in needs and needs[key] not in j):
         await q.message.reply_text("⏳ این دکمه منقضی شده (ربات ری‌استارت شده یا دور جدید شروع شده). دوباره /news بزنید.")
         return
@@ -617,9 +644,17 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         else:
             j["prep"]["plan"] = editor.simple_plan(j["prep"]["sentences"], done_media(j))
             await show_plan(update, ctx)
-    elif d.startswith("nar_ok"):
+    elif d == "final_ok":
+        if not j.get("prep"):
+            await q.message.reply_text("⏳ این پیش‌نمایش منقضی شده؛ دوباره «ساخت» را بزنید.", reply_markup=retry_markup(j))
+            return
+        await q.edit_message_reply_markup(None)
+        j["preview"] = False
+        await produce(update, ctx)
+    elif d.startswith(("nar_ok", "nar_test")):
         fmt = d.split(":", 1)[1] if ":" in d else "9x16"  # old buttons had no format
         j["fmt"] = fmt if fmt in video.FORMATS else "9x16"
+        j["preview"] = d.startswith("nar_test")
         await q.edit_message_reply_markup(None)  # no double build from a second press
         await build_and_send(update, ctx)
 
