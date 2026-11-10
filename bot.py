@@ -24,7 +24,7 @@ from services.sources_fa import source_fa
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 # httpx logs full URLs at INFO level, and Telegram URLs contain the bot token
-for noisy in ("httpx", "httpcore"):
+for noisy in ("httpx", "httpcore", "httpx2", "httpcore2"):
     logging.getLogger(noisy).setLevel(logging.WARNING)
 log = logging.getLogger("newsbot")
 URL_RE = re.compile(r"https?://\S+")
