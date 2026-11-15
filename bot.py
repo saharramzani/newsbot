@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 
 from telegram.error import BadRequest
-from telegram import InlineKeyboardButton as Btn, InlineKeyboardMarkup as Markup, Update
+from telegram import BotCommand, InlineKeyboardButton as Btn, InlineKeyboardMarkup as Markup, Update
 from telegram.ext import (AIORateLimiter, Application, CallbackQueryHandler, CommandHandler, ContextTypes,
                           MessageHandler, PicklePersistence, filters)
 
@@ -175,13 +175,27 @@ async def say(update_or_q, ctx, text, markup=None):
 
 # ---------- commands ----------
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("سلام 👋\n/news ← جست‌وجوی تیترهای ۱۲ ساعت اخیر\n"
+    await update.message.reply_text("سلام 👋\n/news ← جست‌وجوی خبرهای مهم\n/list ← برگشت به همان لیست اخبار (بدون جست‌وجوی دوباره)\n"
                                     "/bulletin ← ساخت بولتن خبری (فایل Word)\n/cancel ← لغو کار جاری")
 
 
 async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data.pop("job", None)
-    await update.message.reply_text("کار جاری لغو شد.")
+    await update.message.reply_text("کار جاری لغو شد. برای دیدن دوباره‌ی همان لیست اخبار /list")
+
+
+async def cmd_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Back to the last news list: drops the current step, no new search."""
+    last = ctx.user_data.get("last_news")
+    if not last or not last.get("items"):
+        await update.message.reply_text("هنوز لیستی نگرفته‌اید؛ اول /news بزنید.")
+        return
+    ctx.user_data["job"] = {"all_items": last["items"]}
+    mins = int((time.time() - last["at"]) // 60)
+    age = f"{mins} دقیقه پیش" if mins < 120 else f"{mins // 60} ساعت پیش"
+    await update.message.reply_text(f"🔙 برگشت به لیست اخبار (جست‌وجوی {age}؛ کار نیمه‌تمام کنار گذاشته شد). "
+                                    "برای خبرهای تازه /news")
+    await show_news(update, ctx)
 
 
 async def cmd_news(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -195,6 +209,8 @@ async def cmd_news(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     j = job(ctx)
     j["all_items"] = items
+    # kept outside the job, so /cancel or a new step does not lose it; /list shows it again without searching
+    ctx.user_data["last_news"] = {"items": items, "at": time.time()}
     if sources:
         await say(update, ctx, "\n".join(f"ℹ️ {s['title']} {s['uri']}".strip() for s in sources[:12]))
     await show_news(update, ctx)
@@ -250,6 +266,8 @@ async def cmd_bulletin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ---------- pipeline steps ----------
 async def next_in_queue(update, ctx):
     j = job(ctx)
+    if "queue" not in j:  # the user went back with /list or /cancel while this item was still being built
+        return
     if not j.get("queue"):
         await ctx.bot.send_message(update.effective_chat.id, "✅ همه‌ی خبرهای انتخاب‌شده تمام شد. برای دور جدید /news")
         return
@@ -848,6 +866,19 @@ async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE):
             pass
 
 
+async def set_menu(app):
+    """The command menu next to the message box (so it never has to be set by hand in BotFather)."""
+    try:
+        await app.bot.set_my_commands([
+            BotCommand("news", "جست‌وجوی خبرهای مهم"),
+            BotCommand("list", "برگرد به لیست اخبار"),
+            BotCommand("bulletin", "ساخت بولتن خبری (Word)"),
+            BotCommand("cancel", "لغو کار جاری"),
+        ])
+    except Exception:
+        log.exception("could not set the command menu")
+
+
 def main():
     if not config.TELEGRAM_BOT_TOKEN:
         raise SystemExit("TELEGRAM_BOT_TOKEN is not set")
@@ -865,12 +896,13 @@ def main():
     app = (Application.builder().token(config.TELEGRAM_BOT_TOKEN).concurrent_updates(True)
            .connect_timeout(30).read_timeout(60).write_timeout(60).pool_timeout(30).media_write_timeout(600)
            .rate_limiter(AIORateLimiter(max_retries=5))
-           .persistence(PicklePersistence(filepath=config.WORK_DIR / "state.pickle")).build())
+           .persistence(PicklePersistence(filepath=config.WORK_DIR / "state.pickle")).post_init(set_menu).build())
     allowed = filters.User(user_id=list(config.ALLOWED_USER_IDS))
     app.add_handler(CommandHandler("start", cmd_start, filters=allowed))
     app.add_handler(CommandHandler("news", cmd_news, filters=allowed))
     app.add_handler(CommandHandler("cancel", cmd_cancel, filters=allowed))
     app.add_handler(CommandHandler("bulletin", cmd_bulletin, filters=allowed))
+    app.add_handler(CommandHandler("list", cmd_list, filters=allowed))
     app.add_handler(MessageHandler(allowed & (filters.VIDEO | filters.ANIMATION | filters.PHOTO | filters.Document.VIDEO
                                               | filters.Document.IMAGE), on_media))
     app.add_handler(MessageHandler(allowed & filters.TEXT & ~filters.COMMAND, on_text))
