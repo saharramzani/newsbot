@@ -128,11 +128,12 @@ class ImageUnavailable(RuntimeError):
 _image_off_until = [0.0]  # after a 'no quota' answer, skip image calls for a while instead of waiting each time
 
 
-def generate_image(prompt: str, reference: bytes | None = None, aspect: str = "9:16") -> bytes:
+def generate_image(prompt: str, reference: bytes | None = None, aspect: str = "9:16",
+                   fallback_prompt: str | None = None) -> bytes:
     """Image model -> PNG/JPEG bytes. `reference` (optional) is an image the result is based on.
     IMAGE_PROVIDER picks OpenAI or Gemini."""
     if config.IMAGE_PROVIDER == "openai":
-        return _openai_image(prompt, reference, aspect)
+        return _openai_image(prompt, reference, aspect, fallback_prompt)
     if time.monotonic() < _image_off_until[0]:
         raise ImageUnavailable("ساخت تصویر با Gemini برای این کلید فعال نیست (Billing لازم است).")
     import base64
@@ -167,34 +168,49 @@ OPENAI_HINTS = {
 }
 
 
-def _openai_image(prompt: str, reference: bytes | None, aspect: str) -> bytes:
-    """OpenAI image edit (based on the real frame) or generation -> image bytes."""
+def _openai_image(prompt: str, reference: bytes | None, aspect: str, fallback_prompt: str | None = None) -> bytes:
+    """OpenAI-compatible image API (OpenAI itself or a reseller via OPENAI_BASE_URL) -> image bytes.
+
+    With a reference frame the edit endpoint is tried first; if the service does not support it, the image is
+    generated from text only (fallback_prompt).
+    """
     import base64
     if not config.OPENAI_API_KEY:
         raise ImageUnavailable("OPENAI_API_KEY در .env تنظیم نشده.")
-    size = "1024x1536"  # portrait; the cover crops it to 9:16 or 4:5
+    base = config.OPENAI_BASE_URL
+    model = config.OPENAI_IMAGE_MODEL
     headers = {"Authorization": f"Bearer {config.OPENAI_API_KEY}"}
-    data = {"model": config.OPENAI_IMAGE_MODEL, "prompt": prompt, "size": size,
-            "quality": config.OPENAI_IMAGE_QUALITY, "n": "1"}
+    dalle3 = model.startswith("dall-e-3")
+    data = {"model": model, "prompt": prompt, "n": 1,
+            "size": "1024x1792" if dalle3 else "1024x1536",  # portrait; the cover crops it to 9:16 or 4:5
+            "quality": "standard" if dalle3 else config.OPENAI_IMAGE_QUALITY}
+    if dalle3:
+        data["response_format"] = "b64_json"
+    r = None
     try:
-        if reference:
-            r = httpx.post("https://api.openai.com/v1/images/edits", headers=headers, data=data,
+        if reference and not dalle3:  # dall-e-3 has no edit endpoint
+            form = {k: str(v) for k, v in data.items()}
+            r = httpx.post(f"{base}/images/edits", headers=headers, data=form,
                            files={"image": ("frame.png", reference, "image/png")}, timeout=300)
-        else:
-            r = httpx.post("https://api.openai.com/v1/images/generations", headers=headers, json=data, timeout=300)
+        if r is None or r.status_code in (400, 404, 405, 415, 422, 501):  # edit not supported: text-only image
+            gen = dict(data, prompt=fallback_prompt or prompt)
+            r2 = httpx.post(f"{base}/images/generations", headers=headers, json=gen, timeout=300)
+            if r is None or r2.status_code == 200 or r.status_code in (404, 405, 501):
+                r = r2
     except httpx.TransportError as e:
-        raise ImageUnavailable(f"اتصال به OpenAI برقرار نشد: {e}")
+        raise ImageUnavailable(f"اتصال به سرویس تصویر ({base}) برقرار نشد: {e}")
     if r.status_code != 200:
         try:
             err = r.json().get("error", {})
+            err = err if isinstance(err, dict) else {"message": str(err)}
             msg, code = str(err.get("message", "")), str(err.get("code", "") or err.get("type", ""))
         except Exception:
             msg, code = r.text[:300], ""
         hint = next((h for k, h in OPENAI_HINTS.items() if k in (msg + " " + code).lower()), "")
-        raise ImageUnavailable(f"OpenAI تصویر نساخت ({r.status_code}): {msg[:250]}" + (f"\n👉 {hint}" if hint else ""))
+        raise ImageUnavailable(f"سرویس تصویر تصویر نساخت ({r.status_code}): {msg[:250]}" + (f"\n👉 {hint}" if hint else ""))
     item = (r.json().get("data") or [{}])[0]
     if item.get("b64_json"):
         return base64.b64decode(item["b64_json"])
     if item.get("url"):
         return httpx.get(item["url"], timeout=120).content
-    raise ImageUnavailable("OpenAI تصویری برنگرداند.")
+    raise ImageUnavailable("سرویس تصویر، تصویری برنگرداند.")

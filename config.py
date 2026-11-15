@@ -25,6 +25,8 @@ GEMINI_IMAGE_MODEL = get("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image")
 # optional separate key (a billed Google project) only for images, so text calls stay on the free key
 GEMINI_IMAGE_API_KEY = get("GEMINI_IMAGE_API_KEY", "") or GEMINI_API_KEY
 OPENAI_API_KEY = get("OPENAI_API_KEY", "")
+# OpenAI-compatible service address: https://api.openai.com/v1 or a reseller such as https://api.gapgpt.app/v1
+OPENAI_BASE_URL = get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
 OPENAI_IMAGE_MODEL = get("OPENAI_IMAGE_MODEL", "gpt-image-1")
 OPENAI_IMAGE_QUALITY = get("OPENAI_IMAGE_QUALITY", "medium")  # low / medium / high (cost grows with quality)
 # who designs cover backgrounds: openai (if an OpenAI key is set) or gemini
