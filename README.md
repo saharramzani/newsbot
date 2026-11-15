@@ -32,3 +32,14 @@ systemctl restart newsbot
 - به‌روزرسانی: `cd ~/newsbot && git pull && bash deploy/install.sh && systemctl restart newsbot`
 - ربات بعد از خطا یا ری‌استارت سرور خودکار دوباره روشن می‌شود.
 - هم‌زمان فقط یک نسخه با یک توکن اجرا کنید (وگرنه خطای Conflict).
+
+## دانلود از اینستاگرام (کوکی)
+اینستاگرام (و گاهی یوتیوب روی سرور) بدون لاگین اجازه‌ی دانلود نمی‌دهد. ربات می‌تواند از کوکی‌های یک حساب لاگین‌شده استفاده کند:
+1. ترجیحاً با یک **حساب دوم** (نه حساب اصلی) در Chrome یا Edge وارد instagram.com شوید.
+2. افزونه‌ی **Get cookies.txt LOCALLY** را نصب کنید، در صفحه‌ی instagram.com رویش بزنید و **Export** کنید (فایلی مثل `instagram.com_cookies.txt` ذخیره می‌شود).
+3. فایل را به سرور بفرستید (روی لپ‌تاپ، در PowerShell):
+   `scp "$HOME\Downloads\instagram.com_cookies.txt" root@IP:/opt/newsbot/cookies.txt`
+4. روی سرور: `chown newsbot:newsbot /opt/newsbot/cookies.txt && chmod 600 /opt/newsbot/cookies.txt`
+- ری‌استارت لازم نیست. در آن مرورگر از اینستاگرام **Log out نکنید** (کوکی‌ها باطل می‌شوند).
+- اگر بعد از مدتی دوباره خطای لاگین آمد، کوکی‌ها منقضی شده‌اند: مراحل ۲ تا ۴ را تکرار کنید.
+- فایل کوکی مثل رمز عبور است؛ به کسی ندهید. (`cookies.txt` در git ثبت نمی‌شود.)

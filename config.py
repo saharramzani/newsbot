@@ -37,6 +37,8 @@ NEWS_MIN_IMPORTANCE = int(get("NEWS_MIN_IMPORTANCE", "4"))  # /news shows items 
 BULLETIN_HOURS = int(get("BULLETIN_HOURS", "24"))     # news window of the /bulletin command
 BULLETIN_FONT = get("BULLETIN_FONT", "B Nazanin")     # font of the Word bulletin
 ALLOWED_USER_IDS = {int(x) for x in get("ALLOWED_USER_IDS", "").split(",") if x.strip()}
+# Netscape-format cookies of a logged-in browser, for yt-dlp (Instagram, and YouTube on servers)
+YTDLP_COOKIES = get("YTDLP_COOKIES", "cookies.txt")
 WORK_DIR = Path(get("WORK_DIR", "work"))
 
 
