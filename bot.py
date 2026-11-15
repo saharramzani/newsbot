@@ -301,6 +301,8 @@ async def ask_narration_approval(update, ctx):
         reply_markup=Markup([[Btn("✅ ساخت " + f["label"], callback_data=f"nar_ok:{k}") for k, f in video.FORMATS.items()],
                              [Btn("🧪 پیش‌نمایش رایگان " + f["label"], callback_data=f"nar_test:{k}")
                               for k, f in video.FORMATS.items()],
+                             [Btn("🖼 فقط کاور ۹:۱۶", callback_data="cover_only:9x16"),
+                              Btn("🖼 فقط کاور ۴:۵", callback_data="cover_only:4x5")],
                              [Btn("✏️ ویرایش متن", callback_data="nar_edit")]]))
 
 
@@ -631,6 +633,19 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_reply_markup(None)
         await q.message.reply_text("📤 در حال ارسال دوباره…")
         await send_result(update.effective_chat.id, ctx, d[7:])
+        return
+    if d.startswith("cover_only:"):
+        # cover without voice or video: no ElevenLabs credits; the narration buttons stay usable afterwards
+        if not j.get("src") or not j.get("pkg"):
+            await q.message.reply_text("⏳ این دکمه منقضی شده؛ دوباره از /list یا /news شروع کنید.")
+            return
+        fmt = d.split(":", 1)[1]
+        prev = j.get("fmt")
+        j["fmt"] = fmt if fmt in video.FORMATS else "9x16"
+        await q.message.reply_text("🖼 در حال ساخت کاور (بدون صدا و بدون خرج اعتبار ElevenLabs)…")
+        await make_cover(update, ctx)
+        if prev:
+            j["fmt"] = prev
         return
     if d.startswith(("covai:", "covbg:")):
         parts = d.split(":")
