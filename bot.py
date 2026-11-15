@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import logging
 import re
 import shutil
+import subprocess
 import time
 from pathlib import Path
 
@@ -560,15 +561,24 @@ def AI_NAME() -> str:
     return "OpenAI" if config.IMAGE_PROVIDER == "openai" else "Gemini"
 
 
-async def ai_cover_bg(update, ctx, key, quiet=False) -> bool:
-    """Ask Gemini for a designed background; keep the plain frame if it is not available."""
+async def ai_cover_bg(update, ctx, key, quiet=False, extra: str | None = None, reference: str | None = None) -> bool:
+    """Ask the image model for a designed background; keep the plain frame if it is not available.
+
+    extra / reference: the user's own design instructions and a real photo to build on; both are remembered, so
+    «طراحی دوباره» keeps using them.
+    """
     j, chat = job(ctx), update.effective_chat.id
     c = j["covers"][key]
+    if extra is not None:
+        c["design_note"] = extra
+    if reference is not None:
+        c["ref"] = reference
     out = COVER_DIR / f"{chat}_{key}_ai_{int(time.time())}.png"
     if not quiet:
         await ctx.bot.send_message(chat, f"🎨 {AI_NAME()} در حال طراحی پس‌زمینه‌ی کاور…")
     try:
-        await asyncio.to_thread(cover.ai_background, Path(c["bg_frame"]), c["title"], c.get("topic", ""), out, c["fmt"])
+        await asyncio.to_thread(cover.ai_background, Path(c.get("ref") or c["bg_frame"]), c["title"], c.get("topic", ""),
+                                out, c["fmt"], c.get("design_note", ""))
     except Exception as e:
         log.warning("AI cover background failed: %s", e)
         if not quiet or not _ai_cover_warned[0]:  # say it once, not on every cover
@@ -590,7 +600,9 @@ def cover_keyboard(c: dict, key: str) -> Markup:
         design.append(Btn("🖼 فقط فریم ویدئو", callback_data=f"covbg:{key}:frame"))
     elif c.get("bg_ai"):
         design.append(Btn(f"🎨 نسخه‌ی {AI_NAME()}", callback_data=f"covbg:{key}:ai"))
-    return Markup(([opts] if opts else []) + [design, [Btn("✏️ نوشتن متن دلخواه", callback_data=f"cov:{key}")]])
+    return Markup(([opts] if opts else []) + [design,
+                                              [Btn("✏️ طراحی با توضیح من", callback_data=f"covdesign:{key}")],
+                                              [Btn("✏️ نوشتن متن دلخواه", callback_data=f"cov:{key}")]])
 
 
 async def send_cover(update, ctx, key):
@@ -633,6 +645,20 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_reply_markup(None)
         await q.message.reply_text("📤 در حال ارسال دوباره…")
         await send_result(update.effective_chat.id, ctx, d[7:])
+        return
+    if d.startswith("covdesign:"):
+        key = d.split(":", 1)[1]
+        if key not in j.get("covers", {}):
+            await q.message.reply_text("⏳ این کاور دیگر قابل ویرایش نیست.")
+            return
+        j["cover_edit"], j["stage_before_cover"] = key, j.get("stage")
+        j["stage"] = "cover_design"
+        await q.message.reply_text(
+            "🎨 بنویسید چه طرحی می‌خواهید، مثلاً:\n"
+            "• «پرچم عراق موج‌دار و نقشه‌ی عراق طلایی با فلش قرمز، کاخ دولت پشتش»\n"
+            "• «نفتکش در حال سوختن در تنگه هرمز، آسمان نارنجی»\n\n"
+            "📷 یا یک **عکس واقعی** بفرستید (مثلاً عکس خبری شخص یا محل) و توضیح را در کپشنش بنویسید؛ طرح دور همان عکس "
+            "ساخته می‌شود.")
         return
     if d.startswith("cover_only:"):
         # cover without voice or video: no ElevenLabs credits; the narration buttons stay usable afterwards
@@ -779,6 +805,13 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if stage == "downloading":
         await update.message.reply_text("⏳ هنوز در حال دانلود ویدئوی قبلی هستم؛ صبر کنید.")
         return
+    if stage == "cover_design":
+        key = j.pop("cover_edit", None)
+        j["stage"] = j.pop("stage_before_cover", None)
+        if key in j.get("covers", {}):
+            if await ai_cover_bg(update, ctx, key, extra=text.strip()):
+                await send_cover(update, ctx, key)
+        return
     if stage == "cover_text":
         key = j.pop("cover_edit", None)
         j["stage"] = j.pop("stage_before_cover", None)  # go back to whatever step the user was on
@@ -816,6 +849,31 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await ask_narration_approval(update, ctx)
     else:
         await update.message.reply_text("برای شروع /news")
+
+
+async def cover_photo(update, ctx):
+    """A real photo sent for the cover design: the background is built around it (caption = instructions)."""
+    j, msg = job(ctx), update.message
+    att = msg.photo[-1] if msg.photo else msg.document
+    if not att or (msg.document and not (msg.document.mime_type or "").startswith("image/")):
+        await msg.reply_text("برای طراحی کاور، عکس بفرستید (نه ویدئو).")
+        return
+    key = j.pop("cover_edit", None)
+    j["stage"] = j.pop("stage_before_cover", None)
+    if key not in j.get("covers", {}):
+        return
+    COVER_DIR.mkdir(parents=True, exist_ok=True)
+    raw = COVER_DIR / f"{update.effective_chat.id}_{key}_ref_raw"
+    f = await att.get_file()
+    await f.download_to_drive(raw)
+    ref = COVER_DIR / f"{update.effective_chat.id}_{key}_ref.png"  # normalise any image format to PNG
+    await asyncio.to_thread(subprocess.run, ["ffmpeg", "-y", "-i", str(raw), "-frames:v", "1", str(ref)], capture_output=True)
+    raw.unlink(missing_ok=True)
+    if not ref.exists():
+        await msg.reply_text("❌ این عکس خوانده نشد؛ عکس دیگری بفرستید.")
+        return
+    if await ai_cover_bg(update, ctx, key, extra=(msg.caption or "").strip(), reference=str(ref)):
+        await send_cover(update, ctx, key)
 
 
 def media_root(update) -> Path:
@@ -905,6 +963,9 @@ async def add_link(update, ctx, url: str, note: str | None = None):
 
 async def on_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     j = job(ctx)
+    if j.get("stage") == "cover_design":
+        await cover_photo(update, ctx)
+        return
     if j.get("stage") != "link":
         return
     msg = update.message
