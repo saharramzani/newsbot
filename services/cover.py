@@ -176,7 +176,7 @@ def ai_background(frame: Path, headline: str, topic: str, out: Path, fmt: str = 
     fields = dict(ratio=ratio, headline=headline.replace("\n", " "), topic=topic or "—")
     data = llm.generate_image(AI_PROMPT.format(**fields), frame.read_bytes(), ratio,
                               fallback_prompt=AI_PROMPT_TEXT.format(**fields))
-    raw = out.with_suffix(".raw")
+    raw = out.with_name(out.stem + "_raw" + (llm.image_ext(data) or ".png"))  # ffmpeg picks the decoder by extension
     raw.write_bytes(data)
     _run(["ffmpeg", "-y", "-i", str(raw), "-vf",
           f"scale={f['w']}:{f['h']}:force_original_aspect_ratio=increase,crop={f['w']}:{f['h']},setsar=1",

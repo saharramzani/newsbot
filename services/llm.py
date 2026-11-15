@@ -154,7 +154,7 @@ def generate_image(prompt: str, reference: bytes | None = None, aspect: str = "9
     for cand in r.json().get("candidates") or []:
         for p in cand.get("content", {}).get("parts", []):
             if "inlineData" in p:
-                return b64.b64decode(p["inlineData"]["data"])
+                return check_image(b64.b64decode(p["inlineData"]["data"]), "gemini")
     raise ImageUnavailable("Gemini تصویری برنگرداند (احتمالاً درخواست را رد کرد).")
 
 
@@ -210,7 +210,31 @@ def _openai_image(prompt: str, reference: bytes | None, aspect: str, fallback_pr
         raise ImageUnavailable(f"سرویس تصویر تصویر نساخت ({r.status_code}): {msg[:250]}" + (f"\n👉 {hint}" if hint else ""))
     item = (r.json().get("data") or [{}])[0]
     if item.get("b64_json"):
-        return base64.b64decode(item["b64_json"])
+        return check_image(base64.b64decode(item["b64_json"]), "b64_json")
     if item.get("url"):
-        return httpx.get(item["url"], timeout=120).content
-    raise ImageUnavailable("سرویس تصویر، تصویری برنگرداند.")
+        u = item["url"]
+        if u.startswith("data:image"):  # some services return a data URL
+            return check_image(base64.b64decode(u.split(",", 1)[1]), "data url")
+        got = httpx.get(u, timeout=120, follow_redirects=True)  # image links often redirect to a CDN
+        return check_image(got.content, f"url ({got.status_code}, {got.headers.get('content-type', '?')})")
+    raise ImageUnavailable("سرویس تصویر، تصویری برنگرداند: " + str(r.json())[:200])
+
+
+def image_ext(data: bytes) -> str | None:
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return ".png"
+    if data[:3] == b"\xff\xd8\xff":
+        return ".jpg"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return ".webp"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return ".gif"
+    return None
+
+
+def check_image(data: bytes, where: str) -> bytes:
+    """Make sure we really got an image (not an error page or a redirect body)."""
+    if not image_ext(data):
+        preview = data[:200].decode("utf-8", "replace").replace("\n", " ")
+        raise ImageUnavailable(f"پاسخ سرویس تصویر، تصویر نبود ({where}، {len(data)} بایت): {preview}")
+    return data
