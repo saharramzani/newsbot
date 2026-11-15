@@ -538,16 +538,52 @@ async def make_cover(update, ctx):
         await ctx.bot.send_message(chat, f"⚠️ ساخت کاور شکست خورد (ویدئو سالم است):\n{e}")
         return
     covers = j.setdefault("covers", {})
-    covers[key] = {"bg": str(bg), "fmt": fmt, "title": cover_title(j["pkg"]), "options": cover_options(j["pkg"])}
+    covers[key] = {"bg": str(bg), "bg_frame": str(bg), "bg_ai": None, "fmt": fmt, "title": cover_title(j["pkg"]),
+                   "options": cover_options(j["pkg"]),
+                   "topic": j["pkg"].get("topic") or j.get("current", {}).get("title_fa", "")}
     for old in sorted(covers)[:-10]:  # keep the last 10 covers editable
-        Path(covers.pop(old)["bg"]).unlink(missing_ok=True)
+        c_old = covers.pop(old)
+        for f in (c_old.get("bg_frame") or c_old["bg"], c_old.get("bg_ai")):
+            if f:
+                Path(f).unlink(missing_ok=True)
+    if config.COVER_AI:
+        await ai_cover_bg(update, ctx, key, quiet=True)
     await send_cover(update, ctx, key)
+
+
+_ai_cover_warned = [False]
+
+
+async def ai_cover_bg(update, ctx, key, quiet=False) -> bool:
+    """Ask Gemini for a designed background; keep the plain frame if it is not available."""
+    j, chat = job(ctx), update.effective_chat.id
+    c = j["covers"][key]
+    out = COVER_DIR / f"{chat}_{key}_ai_{int(time.time())}.png"
+    if not quiet:
+        await ctx.bot.send_message(chat, "🎨 Gemini در حال طراحی پس‌زمینه‌ی کاور…")
+    try:
+        await asyncio.to_thread(cover.ai_background, Path(c["bg_frame"]), c["title"], c.get("topic", ""), out, c["fmt"])
+    except Exception as e:
+        log.warning("AI cover background failed: %s", e)
+        if not quiet or not _ai_cover_warned[0]:  # say it once, not on every cover
+            _ai_cover_warned[0] = True
+            await ctx.bot.send_message(chat, f"ℹ️ طراحی کاور با Gemini انجام نشد؛ کاور با فریم ویدئو ساخته شد.\n{e}")
+        return False
+    if c.get("bg_ai"):
+        Path(c["bg_ai"]).unlink(missing_ok=True)
+    c["bg_ai"] = c["bg"] = str(out)
+    return True
 
 
 def cover_keyboard(c: dict, key: str) -> Markup:
     opts = [Btn(f"گزینه {k + 1}", callback_data=f"covopt:{key}:{k}")
             for k, o in enumerate(c.get("options", [])) if o != c["title"]]
-    return Markup(([opts] if opts else []) + [[Btn("✏️ نوشتن متن دلخواه", callback_data=f"cov:{key}")]])
+    design = [Btn("🎨 طراحی با Gemini" if not c.get("bg_ai") else "🎨 طراحی دوباره با Gemini", callback_data=f"covai:{key}")]
+    if c.get("bg_ai") and c["bg"] == c["bg_ai"]:
+        design.append(Btn("🖼 فقط فریم ویدئو", callback_data=f"covbg:{key}:frame"))
+    elif c.get("bg_ai"):
+        design.append(Btn("🎨 نسخه‌ی Gemini", callback_data=f"covbg:{key}:ai"))
+    return Markup(([opts] if opts else []) + [design, [Btn("✏️ نوشتن متن دلخواه", callback_data=f"cov:{key}")]])
 
 
 async def send_cover(update, ctx, key):
@@ -590,6 +626,19 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_reply_markup(None)
         await q.message.reply_text("📤 در حال ارسال دوباره…")
         await send_result(update.effective_chat.id, ctx, d[7:])
+        return
+    if d.startswith(("covai:", "covbg:")):
+        parts = d.split(":")
+        c = j.get("covers", {}).get(parts[1])
+        if not c:
+            await q.message.reply_text("⏳ این کاور دیگر قابل ویرایش نیست.")
+            return
+        if parts[0] == "covai":
+            if not await ai_cover_bg(update, ctx, parts[1]):
+                return
+        else:
+            c["bg"] = c["bg_ai"] if parts[2] == "ai" and c.get("bg_ai") else c.get("bg_frame", c["bg"])
+        await send_cover(update, ctx, parts[1])
         return
     if d.startswith("covopt:"):
         _, key, k = d.split(":")

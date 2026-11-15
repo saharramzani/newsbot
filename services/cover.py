@@ -143,6 +143,36 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
     return out
 
 
+AI_PROMPT = """Create a dramatic, high-contrast editorial news thumbnail BACKGROUND (vertical {ratio}) for a
+Persian-language oil & energy news channel, in the style of viral news-channel covers.
+Story headline: {headline}
+Story: {topic}
+
+Use the attached frame from the real news footage as the main subject. Keep any real people in it recognisable and
+unaltered (no new expressions, gestures or actions). You may restyle lighting and colour, extend or re-compose the
+scene, and add symbolic elements that fit the story: flags, maps, oil barrels, tankers, pipelines, refineries, smoke,
+fire, falling or rising charts, money, military silhouettes.
+Rules: do NOT add any real, identifiable person who is not in the frame. NO text, letters, numbers, logos or
+watermarks anywhere in the image. Keep the lower 40% of the image darker and calmer, because a headline will be
+placed there. Photorealistic, cinematic lighting, sharp focus."""
+
+
+def ai_background(frame: Path, headline: str, topic: str, out: Path, fmt: str = "9x16") -> Path:
+    """Gemini redesigns the real video frame into a cover background (no text); headline banners go on later."""
+    from services import llm
+    f = FORMATS[fmt]
+    ratio = "9:16" if fmt == "9x16" else "4:5"
+    data = llm.generate_image(AI_PROMPT.format(ratio=ratio, headline=headline.replace("\n", " "), topic=topic or "—"),
+                              frame.read_bytes(), ratio)
+    raw = out.with_suffix(".raw")
+    raw.write_bytes(data)
+    _run(["ffmpeg", "-y", "-i", str(raw), "-vf",
+          f"scale={f['w']}:{f['h']}:force_original_aspect_ratio=increase,crop={f['w']}:{f['h']},setsar=1",
+          "-frames:v", "1", str(out)])
+    raw.unlink(missing_ok=True)
+    return out
+
+
 def _run(cmd):
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:

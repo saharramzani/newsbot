@@ -20,7 +20,11 @@ ELEVENLABS_MODEL = get("ELEVENLABS_MODEL", "eleven_v3")
 LLM_PROVIDER = get("LLM_PROVIDER", "gemini")
 GEMINI_API_KEY = get("GEMINI_API_KEY", "")
 GEMINI_MODEL = get("GEMINI_MODEL", "gemini-2.5-flash")
-GEMINI_RPM = int(get("GEMINI_RPM", "9"))  # requests per minute we allow ourselves (free tier: ~10)
+GEMINI_RPM = int(get("GEMINI_RPM", "9"))
+GEMINI_IMAGE_MODEL = get("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image")
+# optional separate key (a billed Google project) only for images, so text calls stay on the free key
+GEMINI_IMAGE_API_KEY = get("GEMINI_IMAGE_API_KEY", "") or GEMINI_API_KEY
+COVER_AI = get("COVER_AI", "on").lower() == "on"  # design cover backgrounds with Gemini (needs billing)  # requests per minute we allow ourselves (free tier: ~10)
 SCOUT_MODEL = get("SCOUT_MODEL", "claude-opus-5-5")
 WRITER_MODEL = get("WRITER_MODEL", "claude-opus-5-5")
 WHISPER_MODEL = get("WHISPER_MODEL", "small")

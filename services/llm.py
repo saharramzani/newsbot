@@ -119,3 +119,36 @@ def generate_parts(system: str, parts: list, max_tokens: int = 4000) -> str:
                                                      messages=[{"role": "user", "content": content}])
         return "".join(b.text for b in resp.content if b.type == "text")
     raise RuntimeError(f"Unknown LLM_PROVIDER: {config.LLM_PROVIDER}")
+
+
+class ImageUnavailable(RuntimeError):
+    """Image generation is not available for this key (free tier has zero quota) or failed."""
+
+
+_image_off_until = [0.0]  # after a 'no quota' answer, skip image calls for a while instead of waiting each time
+
+
+def generate_image(prompt: str, reference: bytes | None = None, aspect: str = "9:16") -> bytes:
+    """Gemini image model -> PNG/JPEG bytes. `reference` (optional) is an image the result is based on."""
+    if time.monotonic() < _image_off_until[0]:
+        raise ImageUnavailable("ساخت تصویر با Gemini برای این کلید فعال نیست (Billing لازم است).")
+    import base64
+    parts = [{"text": prompt}]
+    if reference:
+        parts.append({"inlineData": {"mimeType": "image/png", "data": base64.b64encode(reference).decode()}})
+    body = {"contents": [{"role": "user", "parts": parts}],
+            "generationConfig": {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": aspect}}}
+    url = GEMINI_URL.format(model=config.GEMINI_IMAGE_MODEL)
+    r = httpx.post(url, headers={"x-goog-api-key": config.GEMINI_IMAGE_API_KEY}, json=body, timeout=240)
+    if r.status_code == 429 and "limit: 0" in r.text:
+        _image_off_until[0] = time.monotonic() + 3600
+        raise ImageUnavailable("ساخت تصویر با Gemini در پلن رایگان بسته است (سهمیه‌ی صفر)؛ "
+                               "برای فعال شدن، Billing را در Google AI Studio روشن کنید.")
+    if r.status_code != 200:
+        raise ImageUnavailable(f"Gemini تصویر نساخت ({r.status_code}): {_gemini_error(r)}")
+    import base64 as b64
+    for cand in r.json().get("candidates") or []:
+        for p in cand.get("content", {}).get("parts", []):
+            if "inlineData" in p:
+                return b64.b64decode(p["inlineData"]["data"])
+    raise ImageUnavailable("Gemini تصویری برنگرداند (احتمالاً درخواست را رد کرد).")
