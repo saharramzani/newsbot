@@ -1,5 +1,7 @@
 """Download a source video from a link with yt-dlp."""
 import shutil
+import threading
+import time
 import subprocess
 import sys
 from pathlib import Path
@@ -30,7 +32,44 @@ def check_video(path: Path) -> float:
     return secs
 
 
+_insta_lock = threading.Lock()
+_insta_last = [0.0]
+INSTA_GAP = 8          # seconds between two Instagram downloads (bursts trigger HTTP 429)
+RETRY_WAITS = (30, 90)  # waits before retrying after a 429
+
+
+def clean_url(url: str) -> str:
+    """Instagram share links carry tracking parameters (?igsh=, ?xtok=...) that are not needed."""
+    if "instagram.com" in url:
+        return url.split("?", 1)[0].split("#", 1)[0]
+    return url
+
+
 def download_video(url: str, out_dir: Path) -> Path:
+    url = clean_url(url)
+    if "instagram.com" not in url:
+        return _download(url, out_dir)
+    # one Instagram download at a time, spaced out; on 429 wait and try again
+    last = None
+    for attempt in range(len(RETRY_WAITS) + 1):
+        with _insta_lock:
+            wait = _insta_last[0] + INSTA_GAP - time.monotonic()
+            if wait > 0:
+                time.sleep(wait)
+            try:
+                return _download(url, out_dir)
+            except RuntimeError as e:
+                last = e
+                if "429" not in str(e) and "too many requests" not in str(e).lower():
+                    raise
+            finally:
+                _insta_last[0] = time.monotonic()
+        if attempt < len(RETRY_WAITS):
+            time.sleep(RETRY_WAITS[attempt])
+    raise last
+
+
+def _download(url: str, out_dir: Path) -> Path:
     if not shutil.which("ffmpeg"):
         raise RuntimeError("ffmpeg پیدا نشد؛ yt-dlp بدون آن نمی‌تواند صدا و تصویر را یکی کند.")
     fresh_dir(out_dir)
@@ -38,7 +77,7 @@ def download_video(url: str, out_dir: Path) -> Path:
         sys.executable, "-m", "yt_dlp",
         "-f", "bv*[height<=1080]+ba/b[height<=1080]/b",
         "--merge-output-format", "mp4",
-        "--no-playlist", "--no-part", "--force-overwrites",
+        "--no-playlist", "--no-part", "--force-overwrites", "--extractor-retries", "2",
         "-o", str(out_dir / "source.%(ext)s"), url,
     ]
     cookies = Path(config.YTDLP_COOKIES)
@@ -64,6 +103,9 @@ LOGIN_SIGNS = ("login required", "rate-limit reached", "empty media response", "
 def _hint(url: str, stderr: str) -> str:
     """A Persian explanation for the common 'needs login' failures, shown above yt-dlp's own message."""
     err = stderr.lower()
+    if "429" in err or "too many requests" in err:
+        return ("👉 اینستاگرام موقتاً جلوی درخواست‌های سرور را گرفته (درخواست زیاد در زمان کوتاه). ربات چند بار با فاصله "
+                "دوباره امتحان کرد. چند دقیقه بعد دوباره بفرستید، یا ویدئو را خودتان دانلود و در تلگرام آپلود کنید.\n\n")
     if not any(s in err for s in LOGIN_SIGNS):
         return ""
     site = "اینستاگرام" if "instagram" in url else "یوتیوب" if ("youtu" in url) else "این سایت"
