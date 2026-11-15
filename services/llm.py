@@ -129,7 +129,10 @@ _image_off_until = [0.0]  # after a 'no quota' answer, skip image calls for a wh
 
 
 def generate_image(prompt: str, reference: bytes | None = None, aspect: str = "9:16") -> bytes:
-    """Gemini image model -> PNG/JPEG bytes. `reference` (optional) is an image the result is based on."""
+    """Image model -> PNG/JPEG bytes. `reference` (optional) is an image the result is based on.
+    IMAGE_PROVIDER picks OpenAI or Gemini."""
+    if config.IMAGE_PROVIDER == "openai":
+        return _openai_image(prompt, reference, aspect)
     if time.monotonic() < _image_off_until[0]:
         raise ImageUnavailable("ساخت تصویر با Gemini برای این کلید فعال نیست (Billing لازم است).")
     import base64
@@ -152,3 +155,46 @@ def generate_image(prompt: str, reference: bytes | None = None, aspect: str = "9
             if "inlineData" in p:
                 return b64.b64decode(p["inlineData"]["data"])
     raise ImageUnavailable("Gemini تصویری برنگرداند (احتمالاً درخواست را رد کرد).")
+
+
+OPENAI_HINTS = {
+    "must be verified": "حساب OpenAI باید «تأیید سازمان» (Organization verification) شود تا اجازه‌ی این مدل تصویری را "
+                        "بدهد: platform.openai.com ← Settings ← Organization ← Verify.",
+    "billing": "اعتبار یا پرداخت حساب OpenAI کافی نیست (Billing).",
+    "insufficient_quota": "اعتبار حساب OpenAI تمام شده یا هنوز فعال نشده.",
+    "invalid_api_key": "کلید OPENAI_API_KEY در .env اشتباه یا باطل شده است.",
+    "safety": "OpenAI این درخواست تصویر را به خاطر قوانین محتوایی‌اش رد کرد.",
+}
+
+
+def _openai_image(prompt: str, reference: bytes | None, aspect: str) -> bytes:
+    """OpenAI image edit (based on the real frame) or generation -> image bytes."""
+    import base64
+    if not config.OPENAI_API_KEY:
+        raise ImageUnavailable("OPENAI_API_KEY در .env تنظیم نشده.")
+    size = "1024x1536"  # portrait; the cover crops it to 9:16 or 4:5
+    headers = {"Authorization": f"Bearer {config.OPENAI_API_KEY}"}
+    data = {"model": config.OPENAI_IMAGE_MODEL, "prompt": prompt, "size": size,
+            "quality": config.OPENAI_IMAGE_QUALITY, "n": "1"}
+    try:
+        if reference:
+            r = httpx.post("https://api.openai.com/v1/images/edits", headers=headers, data=data,
+                           files={"image": ("frame.png", reference, "image/png")}, timeout=300)
+        else:
+            r = httpx.post("https://api.openai.com/v1/images/generations", headers=headers, json=data, timeout=300)
+    except httpx.TransportError as e:
+        raise ImageUnavailable(f"اتصال به OpenAI برقرار نشد: {e}")
+    if r.status_code != 200:
+        try:
+            err = r.json().get("error", {})
+            msg, code = str(err.get("message", "")), str(err.get("code", "") or err.get("type", ""))
+        except Exception:
+            msg, code = r.text[:300], ""
+        hint = next((h for k, h in OPENAI_HINTS.items() if k in (msg + " " + code).lower()), "")
+        raise ImageUnavailable(f"OpenAI تصویر نساخت ({r.status_code}): {msg[:250]}" + (f"\n👉 {hint}" if hint else ""))
+    item = (r.json().get("data") or [{}])[0]
+    if item.get("b64_json"):
+        return base64.b64decode(item["b64_json"])
+    if item.get("url"):
+        return httpx.get(item["url"], timeout=120).content
+    raise ImageUnavailable("OpenAI تصویری برنگرداند.")

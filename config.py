@@ -24,6 +24,11 @@ GEMINI_RPM = int(get("GEMINI_RPM", "9"))
 GEMINI_IMAGE_MODEL = get("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image")
 # optional separate key (a billed Google project) only for images, so text calls stay on the free key
 GEMINI_IMAGE_API_KEY = get("GEMINI_IMAGE_API_KEY", "") or GEMINI_API_KEY
+OPENAI_API_KEY = get("OPENAI_API_KEY", "")
+OPENAI_IMAGE_MODEL = get("OPENAI_IMAGE_MODEL", "gpt-image-1")
+OPENAI_IMAGE_QUALITY = get("OPENAI_IMAGE_QUALITY", "medium")  # low / medium / high (cost grows with quality)
+# who designs cover backgrounds: openai (if an OpenAI key is set) or gemini
+IMAGE_PROVIDER = (get("IMAGE_PROVIDER", "") or ("openai" if OPENAI_API_KEY else "gemini")).lower()
 COVER_AI = get("COVER_AI", "on").lower() == "on"  # design cover backgrounds with Gemini (needs billing)  # requests per minute we allow ourselves (free tier: ~10)
 SCOUT_MODEL = get("SCOUT_MODEL", "claude-opus-5-5")
 WRITER_MODEL = get("WRITER_MODEL", "claude-opus-5-5")

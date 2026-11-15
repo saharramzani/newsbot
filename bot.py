@@ -554,20 +554,24 @@ async def make_cover(update, ctx):
 _ai_cover_warned = [False]
 
 
+def AI_NAME() -> str:
+    return "OpenAI" if config.IMAGE_PROVIDER == "openai" else "Gemini"
+
+
 async def ai_cover_bg(update, ctx, key, quiet=False) -> bool:
     """Ask Gemini for a designed background; keep the plain frame if it is not available."""
     j, chat = job(ctx), update.effective_chat.id
     c = j["covers"][key]
     out = COVER_DIR / f"{chat}_{key}_ai_{int(time.time())}.png"
     if not quiet:
-        await ctx.bot.send_message(chat, "🎨 Gemini در حال طراحی پس‌زمینه‌ی کاور…")
+        await ctx.bot.send_message(chat, f"🎨 {AI_NAME()} در حال طراحی پس‌زمینه‌ی کاور…")
     try:
         await asyncio.to_thread(cover.ai_background, Path(c["bg_frame"]), c["title"], c.get("topic", ""), out, c["fmt"])
     except Exception as e:
         log.warning("AI cover background failed: %s", e)
         if not quiet or not _ai_cover_warned[0]:  # say it once, not on every cover
             _ai_cover_warned[0] = True
-            await ctx.bot.send_message(chat, f"ℹ️ طراحی کاور با Gemini انجام نشد؛ کاور با فریم ویدئو ساخته شد.\n{e}")
+            await ctx.bot.send_message(chat, f"ℹ️ طراحی کاور با {AI_NAME()} انجام نشد؛ کاور با فریم ویدئو ساخته شد.\n{e}")
         return False
     if c.get("bg_ai"):
         Path(c["bg_ai"]).unlink(missing_ok=True)
@@ -578,11 +582,12 @@ async def ai_cover_bg(update, ctx, key, quiet=False) -> bool:
 def cover_keyboard(c: dict, key: str) -> Markup:
     opts = [Btn(f"گزینه {k + 1}", callback_data=f"covopt:{key}:{k}")
             for k, o in enumerate(c.get("options", [])) if o != c["title"]]
-    design = [Btn("🎨 طراحی با Gemini" if not c.get("bg_ai") else "🎨 طراحی دوباره با Gemini", callback_data=f"covai:{key}")]
+    design = [Btn(f"🎨 طراحی با {AI_NAME()}" if not c.get("bg_ai") else f"🎨 طراحی دوباره با {AI_NAME()}",
+                  callback_data=f"covai:{key}")]
     if c.get("bg_ai") and c["bg"] == c["bg_ai"]:
         design.append(Btn("🖼 فقط فریم ویدئو", callback_data=f"covbg:{key}:frame"))
     elif c.get("bg_ai"):
-        design.append(Btn("🎨 نسخه‌ی Gemini", callback_data=f"covbg:{key}:ai"))
+        design.append(Btn(f"🎨 نسخه‌ی {AI_NAME()}", callback_data=f"covbg:{key}:ai"))
     return Markup(([opts] if opts else []) + [design, [Btn("✏️ نوشتن متن دلخواه", callback_data=f"cov:{key}")]])
 
 
