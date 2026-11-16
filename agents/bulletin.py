@@ -9,24 +9,22 @@ import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import brands
 import config
 from agents.scout import _fetch_all
 from services import llm
 from services.sources_fa import source_fa
 
 ROOT = Path(__file__).parent.parent
-SECTIONS_FILE = ROOT / "prompts" / "bulletin_sections.txt"
-STYLE = (ROOT / "prompts" / "bulletin_style.md").read_text(encoding="utf-8")
 CLASSIFY_BATCH = 120  # items per sorting request (fewer requests = less rate limiting)
 MAX_PER_SECTION = 40       # items handed to the writer per section (newest first)
 MAX_ENTRIES = 12           # entries written per section
 
 
-def load_sections() -> list[dict]:
+def load_sections(brand=None) -> list[dict]:
     out = []
-    for line in SECTIONS_FILE.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or line.count("|") < 2:
+    for line in brands.get(getattr(brand, "key", brand)).lines("bulletin_sections"):
+        if line.count("|") < 2:
             continue
         key, title, desc = (x.strip() for x in line.split("|", 2))
         out.append({"key": key, "title": title, "desc": desc})
@@ -40,7 +38,7 @@ def _json_array(text: str):
     return json.loads(m.group(0))
 
 
-CLASSIFY = """You sort news items into the sections of a Persian daily news bulletin for an Iranian oil & energy outlet.
+CLASSIFY = """You sort news items into the sections of the Persian daily news bulletin of {outlet}.
 Sections (key: what belongs there):
 {sections}
 - skip: anything that fits none of the sections (sports, celebrities, unrelated world news, ads)
@@ -51,7 +49,7 @@ inside Iran; "mfa" is ONLY Iran's foreign-ministry spokesman. Reply with ONLY a 
 [{{"id": <number>, "section": "<key or skip>"}}]"""
 
 
-WRITE = """تو دبیر بولتن خبری صبحگاهی «آوای نفت» هستی. بخش «{title}» بولتن را از روی خبرهای ورودی می‌نویسی.
+WRITE = """تو دبیر بولتن خبری صبحگاهی «{outlet_fa}» هستی. بخش «{title}» بولتن را از روی خبرهای ورودی می‌نویسی.
 {style}
 
 ## قواعد
@@ -83,7 +81,7 @@ async def collect(hours: int) -> tuple[list[dict], list[str]]:
     return out, errors
 
 
-async def classify(items: list[dict], sections: list[dict]) -> tuple[dict[int, str], list[str]]:
+async def classify(items: list[dict], sections: list[dict], brand) -> tuple[dict[int, str], list[str]]:
     sec_text = "\n".join(f"- {s['key']}: {s['desc']}" for s in sections)
     keys = {s["key"] for s in sections}
     sem = asyncio.Semaphore(3)
@@ -94,7 +92,7 @@ async def classify(items: list[dict], sections: list[dict]) -> tuple[dict[int, s
         async with sem:
             for attempt in range(2):  # a failed batch is retried once; it is never silently dropped
                 try:
-                    text, _ = await asyncio.to_thread(llm.generate, CLASSIFY.format(sections=sec_text), listing, False,
+                    text, _ = await asyncio.to_thread(llm.generate, CLASSIFY.format(sections=sec_text, outlet=brand.outlet_en), listing, False,
                                                       6000)
                     got = {p["id"]: p["section"] for p in _json_array(text)
                            if isinstance(p, dict) and isinstance(p.get("id"), int) and p.get("section") in keys | {"skip"}}
@@ -110,10 +108,11 @@ async def classify(items: list[dict], sections: list[dict]) -> tuple[dict[int, s
     return result, errors
 
 
-async def write_section(section: dict, items: list[tuple[int, dict]]) -> list[dict]:
+async def write_section(section: dict, items: list[tuple[int, dict]], brand) -> list[dict]:
     listing = "\n\n".join(f"{k}. منبع: {source_fa(i)} | زمان: {i['published']:%H:%M UTC}\nتیتر: {i['title']}\nمتن: {i['snippet']}"
                           for k, i in items)
-    system = WRITE.format(title=section["title"], style=STYLE, max_entries=MAX_ENTRIES,
+    system = WRITE.format(title=section["title"], style=brand.text("bulletin_style"), max_entries=MAX_ENTRIES,
+                          outlet_fa=brand.name,
                           extra=PRICE_RULE if section["key"] == "prices" else "")
     text, _ = await asyncio.to_thread(llm.generate, system, listing, False, 6000)
     valid = {k for k, _ in items}
@@ -126,14 +125,15 @@ async def write_section(section: dict, items: list[tuple[int, dict]]) -> list[di
     return out[:MAX_ENTRIES]
 
 
-async def build(hours: int | None = None) -> dict:
+async def build(hours: int | None = None, brand=None) -> dict:
     """Returns {'sections': [{'title', 'entries': [{'source','text','links'}]}], 'stats': {...}, 'errors': [...]}."""
     hours = hours or config.BULLETIN_HOURS
-    sections = load_sections()
+    brand = brands.get(getattr(brand, "key", brand))
+    sections = load_sections(brand)
     items, errors = await collect(hours)
     if not items:
         raise RuntimeError("هیچ خبری از فیدها دریافت نشد. فیدهای ناموفق: " + ", ".join(errors or ["—"]))
-    where, class_errors = await classify(items, sections)
+    where, class_errors = await classify(items, sections, brand)
     if not where:
         raise RuntimeError("دسته‌بندی خبرها با هوش مصنوعی انجام نشد: " + "؛ ".join(class_errors or ["پاسخ خالی"]))
     sem = asyncio.Semaphore(3)
@@ -144,10 +144,10 @@ async def build(hours: int | None = None) -> dict:
             return sec, [], None
         async with sem:
             try:
-                return sec, await write_section(sec, mine), None
+                return sec, await write_section(sec, mine, brand), None
             except Exception:
                 try:  # one retry (usually a rate-limit hiccup)
-                    return sec, await write_section(sec, mine), None
+                    return sec, await write_section(sec, mine, brand), None
                 except Exception as e:
                     return sec, [], str(e)[:200]
     out_sections, failed = [], []

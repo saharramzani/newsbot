@@ -13,6 +13,7 @@ from email.utils import parsedate_to_datetime
 
 import httpx
 
+import brands
 import config
 from services import llm
 
@@ -33,22 +34,15 @@ def load_feeds() -> list[tuple[str, str]]:
             feeds.append((name, url))
     return feeds
 
-TOPICS_FILE = Path(__file__).parent.parent / "prompts" / "scout_topics.md"
+def load_topics(brand=None) -> str:
+    return "\n".join(f"- {l}" for l in brands.get(getattr(brand, "key", brand)).lines("topics"))
 
 
-def load_topics() -> str:
-    lines = [l.strip() for l in TOPICS_FILE.read_text(encoding="utf-8").splitlines()]
-    return "\n".join(f"- {l}" for l in lines if l and not l.startswith("#"))
+def load_filter(brand=None) -> str:
+    return "\n".join(brands.get(getattr(brand, "key", brand)).lines("filter"))
 
 
-FILTER_FILE = Path(__file__).parent.parent / "prompts" / "news_filter.md"
-
-
-def load_filter() -> str:
-    return "\n".join(l for l in FILTER_FILE.read_text(encoding="utf-8").splitlines() if l.strip() and not l.startswith("#"))
-
-
-SYSTEM = """You are the news editor of Avaye Naft, a Persian-language outlet specialised in oil and energy.
+SYSTEM = """You are the news editor of {outlet}.
 Its core topics are:
 {topics}
 
@@ -155,14 +149,14 @@ def _extract_json(text: str):
     return json.loads(m.group(0))
 
 
-async def _translate(batch: list[dict], offset: int, topics: str) -> dict[int, dict]:
+async def _translate(batch: list[dict], offset: int, topics: str, brand) -> dict[int, dict]:
     listing = "\n".join(f"{offset + k}. [{i['source']}] {i['title']} — {i['snippet'][:160]}" for k, i in enumerate(batch))
-    text, _ = await asyncio.to_thread(llm.generate, SYSTEM.format(topics=topics, scale=load_filter()), listing,
+    text, _ = await asyncio.to_thread(llm.generate, SYSTEM.format(topics=topics, scale=load_filter(brand), outlet=brand.outlet_en), listing,
                                       False, 6000)
     return {p["id"]: p for p in _extract_json(text) if isinstance(p, dict) and isinstance(p.get("id"), int)}
 
 
-async def find_news(hours: int | None = None) -> tuple[list[dict], list[dict]]:
+async def find_news(hours: int | None = None, brand=None) -> tuple[list[dict], list[dict]]:
     """ALL items from the feeds in the time window (newest first), headlines translated to Persian.
 
     Returns (items, notes). `notes` is a list of {'title','uri'} shown to the user as extra info.
@@ -188,13 +182,14 @@ async def find_news(hours: int | None = None) -> tuple[list[dict], list[dict]]:
     if not recent:
         raise RuntimeError("هیچ خبری از فیدها دریافت نشد. فیدهای ناموفق: " + ", ".join(errors or ["—"]))
 
-    topics = load_topics()
+    brand = brands.get(getattr(brand, "key", brand))
+    topics = load_topics(brand)
     sem = asyncio.Semaphore(3)  # stay under the free-tier requests-per-minute limit
 
     async def run(start):
         async with sem:
             try:
-                return await _translate(recent[start:start + BATCH], start, topics)
+                return await _translate(recent[start:start + BATCH], start, topics, brand)
             except Exception:
                 return {}
     translated = {}

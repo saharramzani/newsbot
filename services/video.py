@@ -22,7 +22,8 @@ def _ts(t: float) -> str:
     return f"{int(h)}:{int(m):02d}:{s:05.2f}"
 
 
-def build_ass(words: list[dict], path: Path, group: int = 3, fmt: str = "9x16") -> Path:
+def build_ass(words: list[dict], path: Path, group: int = 3, fmt: str = "9x16", highlight: str | None = None) -> Path:
+    hl = highlight or YELLOW
     f = FORMATS[fmt]
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -50,7 +51,7 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
             stop = chunk[k + 1]["start"] if k + 1 < len(chunk) else end
             if stop <= start:
                 continue
-            body = " ".join(f"{{\\c{YELLOW}}}{t}{{\\c{WHITE}}}" if j == k else t for j, t in enumerate(clean))
+            body = " ".join(f"{{\\c{hl}}}{t}{{\\c{WHITE}}}" if j == k else t for j, t in enumerate(clean))
             # Encoding -1 (style) lets libass detect the base direction from the text: Persian -> right-to-left.
             # Newer libass (Windows builds) ignores RLE/PDF embedding marks, so we do not rely on them; a leading
             # RLM (a strong RTL character) keeps lines that start with a Latin word or number right-to-left too.
@@ -82,7 +83,7 @@ def _filter_path(p: Path) -> str:
 
 
 def build_video(src: Path, narration: Path, ass: Path, out: Path, logo: Path | None = None,
-                fmt: str = "9x16") -> Path:
+                fmt: str = "9x16", template: Path | None = None) -> Path:
     f = FORMATS[fmt]
     w, h = f["w"], f["h"]
     dur = duration(narration) + 0.5
@@ -90,7 +91,7 @@ def build_video(src: Path, narration: Path, ass: Path, out: Path, logo: Path | N
     fonts = Path("assets/fonts")
     ass_filter = f"ass={_filter_path(ass)}" + (f":fontsdir={_filter_path(fonts)}" if fonts.exists() else "")
     base = f"[0:v]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},setsar=1,fps=30[bg]"
-    template = Path(f["template"])
+    template = Path(template or f["template"])  # the outlet's uniform
     if template.exists():  # brand uniform already contains the logo
         cmd += ["-loop", "1", "-i", str(template)]
         fc = f"{base};[2:v]scale={w}:{h},format=rgba[tp];[bg][tp]overlay=0:0:shortest=0[ov];[ov]{ass_filter}[vout]"

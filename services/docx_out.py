@@ -64,7 +64,7 @@ def _run(paragraph, text, size=12, bold=False, color=None):
     return r
 
 
-def write(bulletin: dict, out: Path, when: datetime, with_links: bool = False) -> Path:
+def write(bulletin: dict, out: Path, when: datetime, with_links: bool = False, outlet: str = "") -> Path:
     doc = Document()
     sec = doc.sections[0]
     sec._sectPr.append(OxmlElement("w:bidi"))
@@ -72,7 +72,7 @@ def write(bulletin: dict, out: Path, when: datetime, with_links: bool = False) -
     _rtl(title, WD_ALIGN_PARAGRAPH.RIGHT)
     part = "صبح" if when.hour < 12 else "بعدازظهر" if when.hour < 18 else "شب"
     hour = when.hour if when.hour <= 12 else when.hour - 12
-    _run(title, f"بولتن ساعت {hour} {part} {persian_date(when)}", 14, bold=True)
+    _run(title, f"بولتن {outlet + ' ' if outlet else ''}ساعت {hour} {part} {persian_date(when)}", 14, bold=True)
     if with_links:
         p = doc.add_paragraph()
         _rtl(p, WD_ALIGN_PARAGRAPH.RIGHT)

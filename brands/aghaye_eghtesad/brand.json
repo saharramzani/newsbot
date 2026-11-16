@@ -1,0 +1,19 @@
+{
+  "name": "آقای اقتصاد",
+  "emoji": "💰",
+  "hashtag": "#آقای_اقتصاد",
+  "outlet_en": "Aghaye Eghtesad (Mr. Economy), a Persian-language outlet about Iran's economy, markets and money",
+  "voice_id": "",
+  "highlight": "#22C55E",
+  "order": 2,
+  "files": {
+    "topics": "brands/aghaye_eghtesad/topics.md",
+    "filter": "brands/aghaye_eghtesad/filter.md",
+    "writer_style": "brands/aghaye_eghtesad/writer_style.md",
+    "cover_style": "brands/aghaye_eghtesad/cover_style.md",
+    "bulletin_sections": "brands/aghaye_eghtesad/bulletin_sections.txt",
+    "template_9x16": "brands/aghaye_eghtesad/template_9x16.png",
+    "template_4x5": "brands/aghaye_eghtesad/template_4x5.png",
+    "cover_icon": "brands/aghaye_eghtesad/icon.png"
+  }
+}

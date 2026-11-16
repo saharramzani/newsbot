@@ -22,6 +22,7 @@ from agents.scout import find_news
 from agents.writer import write_package
 from services import cover, docx_out, download, editor, stt, tts, video
 from services.sources_fa import source_fa
+import brands
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 # httpx logs full URLs at INFO level, and Telegram URLs contain the bot token
@@ -33,6 +34,15 @@ URL_RE = re.compile(r"https?://\S+")
 
 def job(ctx) -> dict:
     return ctx.user_data.setdefault("job", {})
+
+
+def brand_of(ctx) -> brands.Brand:
+    """The outlet of the current job (falls back to the user's last choice, then the default outlet)."""
+    return brands.get(ctx.user_data.get("job", {}).get("brand") or ctx.user_data.get("brand"))
+
+
+def brand_keyboard(action: str) -> Markup:
+    return Markup([[Btn(b.label, callback_data=f"{action}:{b.key}")] for b in brands.BRANDS.values()])
 
 
 # ---------- helpers ----------
@@ -59,9 +69,11 @@ def mark(item) -> str:
     return "🔥" if imp >= 5 else "⭐" if imp == 4 else ""
 
 
-def format_news(items, all_view: bool = False) -> str:
+def format_news(items, all_view: bool = False, brand=None) -> str:
     head = (f"📋 همه‌ی {len(items)} خبر (🔥 = خیلی مهم، ⭐ = مهم)" if all_view
             else f"📰 {len(items)} خبر مهم (مهم‌ترین اول؛ 🔥 = خیلی مهم)")
+    if brand and len(brands.BRANDS) > 1:
+        head = f"{brand.label} | " + head
     out = [head + "\n"]
     for i, it in enumerate(items, 1):
         m = mark(it)
@@ -80,19 +92,20 @@ async def show_news(update, ctx, all_view: bool = False):
         await ctx.bot.send_message(chat, "در این بازه خبر مهمی پیدا نشد.", reply_markup=Markup(
             [[Btn(f"📋 نمایش همه ({len(j['all_items'])} خبر)", callback_data="news_all")]]))
         return
-    await say(update, ctx, format_news(items, all_view))
+    await say(update, ctx, format_news(items, all_view, brand_of(ctx)))
     kb = news_keyboard(items, j["selected"])
     if not all_view and len(j["all_items"]) > len(items):
         kb = Markup(list(kb.inline_keyboard) + [[Btn(f"📋 نمایش همه ({len(j['all_items'])} خبر)", callback_data="news_all")]])
     await ctx.bot.send_message(chat, "کدام خبرها؟", reply_markup=kb)
 
 
-def final_caption(pkg: dict, item: dict, limit: int = 2200) -> str:
+def final_caption(pkg: dict, item: dict, limit: int = 2200, brand=None) -> str:
     """Caption + mandatory source line + hashtags. The caption body is shortened if needed, never the source."""
     src = source_fa(item)
     source_line = f"📌 منبع: {src}" if src else ""
     tags = [t if t.startswith("#") else "#" + t for t in (str(x).strip().replace(" ", "_") for x in pkg.get("hashtags", [])) if t]
-    tags = " ".join(["#آوای_نفت"] + [t for t in tags if t != "#آوای_نفت"])
+    brand_tag = brands.get(getattr(brand, "key", brand)).hashtag
+    tags = " ".join(([brand_tag] if brand_tag else []) + [t for t in tags if t != brand_tag])
     tail = "\n\n".join(x for x in (source_line, tags) if x)
     body = pkg.get("caption", "").strip()
     room = limit - len(tail) - 2
@@ -101,9 +114,9 @@ def final_caption(pkg: dict, item: dict, limit: int = 2200) -> str:
     return f"{body}\n\n{tail}" if body else tail
 
 
-def format_package(pkg: dict, item: dict | None = None) -> str:
+def format_package(pkg: dict, item: dict | None = None, brand=None) -> str:
     if "cover_options" not in pkg and "scenario" in pkg:  # package written before the new format
-        return _format_package_old(pkg, item)
+        return _format_package_old(pkg, item, brand)
     opts = "\n".join(f"• گزینه {k}: {o.get('title', '')}" for k, o in enumerate(pkg.get("cover_options", []), 1))
     broll = pkg.get("broll", {})
     def kw(key):
@@ -121,16 +134,16 @@ def format_package(pkg: dict, item: dict | None = None) -> str:
             f"۳. گرافیک و انیمیشن تحلیلی (3D / Maps / Explainer)\n{kw('graphics')}\n\n"
             f"🎙 متن نریتور (Voice-Over)\nلحن: {pkg.get('narration_tone', '')}\n"
             f"تعداد کلمات: {words} (حدود {words / 2.6:.0f} ثانیه)\n\n{pkg.get('narration', '')}\n\n"
-            f"📝 کپشن کامل اینستاگرام\n{final_caption(pkg, item or {})}\n\n"
+            f"📝 کپشن کامل اینستاگرام\n{final_caption(pkg, item or {}, brand=brand)}\n\n"
             f"موارد نیازمند بررسی شما:\n{flags}")
 
 
-def _format_package_old(pkg: dict, item: dict | None = None) -> str:
+def _format_package_old(pkg: dict, item: dict | None = None, brand=None) -> str:
     scenes = "\n".join(f"• {s.get('time', '')} | {s.get('visual', '')} | «{s.get('text_on_screen', '')}»"
                        for s in pkg.get("scenario", []))
     flags = "\n".join(f"⚠️ {f}" for f in pkg.get("flags", [])) or "—"
     return (f"🎬 هوک\n{pkg.get('hook', '')}\n\n🖼 تیتر کاور\n{cover_title(pkg)}\n\n🎙 نریشن\n{pkg.get('narration', '')}"
-            f"\n\n📝 کپشن\n{final_caption(pkg, item or {})}\n\n🎞 سناریو\n{scenes}\n\nموارد نیازمند بررسی شما:\n{flags}")
+            f"\n\n📝 کپشن\n{final_caption(pkg, item or {}, brand=brand)}\n\n🎞 سناریو\n{scenes}\n\nموارد نیازمند بررسی شما:\n{flags}")
 
 
 def cover_options(pkg: dict) -> list[str]:
@@ -191,7 +204,7 @@ async def cmd_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not last or not last.get("items"):
         await update.message.reply_text("هنوز لیستی نگرفته‌اید؛ اول /news بزنید.")
         return
-    ctx.user_data["job"] = {"all_items": last["items"]}
+    ctx.user_data["job"] = {"all_items": last["items"], "brand": last.get("brand") or brands.DEFAULT}
     mins = int((time.time() - last["at"]) // 60)
     age = f"{mins} دقیقه پیش" if mins < 120 else f"{mins // 60} ساعت پیش"
     await update.message.reply_text(f"🔙 برگشت به لیست اخبار (جست‌وجوی {age}؛ کار نیمه‌تمام کنار گذاشته شد). "
@@ -200,18 +213,28 @@ async def cmd_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_news(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    ctx.user_data["job"] = {}
-    await update.message.reply_text("🔎 در حال جمع‌آوری اخبار و انتخاب خبرهای مهم… (۱ تا ۳ دقیقه)")
+    if len(brands.BRANDS) > 1:
+        await update.message.reply_text("برای کدام رسانه؟", reply_markup=brand_keyboard("news_brand"))
+        return
+    await run_news(update, ctx, brands.DEFAULT)
+
+
+async def run_news(update, ctx, brand_key: str):
+    chat = update.effective_chat.id
+    brand = brands.get(brand_key)
+    ctx.user_data["brand"] = brand.key  # remembered as this user's last outlet
+    ctx.user_data["job"] = {"brand": brand.key}
+    await ctx.bot.send_message(chat, f"🔎 {brand.label}: در حال جمع‌آوری اخبار و انتخاب خبرهای مهم… (۱ تا ۳ دقیقه)")
     try:
-        items, sources = await find_news()
+        items, sources = await find_news(brand=brand)
     except Exception as e:
         log.exception("scout failed")
-        await update.message.reply_text(f"❌ جست‌وجو شکست خورد:\n{e}")
+        await ctx.bot.send_message(chat, f"❌ جست‌وجو شکست خورد:\n{e}")
         return
     j = job(ctx)
     j["all_items"] = items
     # kept outside the job, so /cancel or a new step does not lose it; /list shows it again without searching
-    ctx.user_data["last_news"] = {"items": items, "at": time.time()}
+    ctx.user_data["last_news"] = {"items": items, "at": time.time(), "brand": brand.key}
     if sources:
         await say(update, ctx, "\n".join(f"ℹ️ {s['title']} {s['uri']}".strip() for s in sources[:12]))
     await show_news(update, ctx)
@@ -222,30 +245,42 @@ TEHRAN = timezone(timedelta(hours=3, minutes=30))
 
 
 async def cmd_bulletin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if len(brands.BRANDS) > 1:
+        await update.message.reply_text("بولتن کدام رسانه؟", reply_markup=brand_keyboard("bul_brand"))
+        return
+    await run_bulletin(update, ctx, brands.DEFAULT)
+
+
+async def run_bulletin(update, ctx, brand_key: str):
     chat = update.effective_chat.id
+    brand = brands.get(brand_key)
+
+    async def reply(text):
+        await ctx.bot.send_message(chat, text)
     if ctx.chat_data.get("bulletin_running"):
-        await update.message.reply_text("⏳ یک بولتن در حال ساخت است؛ صبر کنید.")
+        await reply("⏳ یک بولتن در حال ساخت است؛ صبر کنید.")
         return
     ctx.chat_data["bulletin_running"] = True
     try:
-        await update.message.reply_text(f"🗞 در حال جمع‌آوری خبرهای {config.BULLETIN_HOURS} ساعت اخیر و نوشتن بولتن… "
-                                        "(چند دقیقه)")
+        await reply(f"🗞 {brand.label}: در حال جمع‌آوری خبرهای {config.BULLETIN_HOURS} ساعت اخیر و نوشتن بولتن… "
+                    "(چند دقیقه)")
         try:
-            b = await bulletin.build()
+            b = await bulletin.build(brand=brand)
         except Exception as e:
             log.exception("bulletin failed")
-            await update.message.reply_text(f"❌ ساخت بولتن شکست خورد:\n{e}")
+            await reply(f"❌ ساخت بولتن شکست خورد:\n{e}")
             return
         if not b["sections"]:
-            await update.message.reply_text("هیچ خبری برای بخش‌های بولتن پیدا نشد.")
+            await reply("هیچ خبری برای بخش‌های بولتن پیدا نشد.")
             return
         when = datetime.now(TEHRAN)
         folder = config.WORK_DIR / "bulletins"
         folder.mkdir(parents=True, exist_ok=True)
         jy, jm, jd = docx_out.to_jalali(when.year, when.month, when.day)
-        stem = f"bulletin_{jy}-{jm:02d}-{jd:02d}_{when:%H%M}"
-        clean = docx_out.write(b, folder / f"{stem}.docx", when)
-        review = docx_out.write(b, folder / f"{stem}_links.docx", when, with_links=True)
+        stem = f"bulletin_{brand.key}_{jy}-{jm:02d}-{jd:02d}_{when:%H%M}"
+        name = "" if brand.key == brands.DEFAULT else brand.name  # the first outlet keeps the approved title
+        clean = docx_out.write(b, folder / f"{stem}.docx", when, outlet=name)
+        review = docx_out.write(b, folder / f"{stem}_links.docx", when, with_links=True, outlet=name)
         counts = "\n".join(f"• {s['title']}: {len(s['entries'])}" for s in b["sections"])
         st = b["stats"]
         note = f"\n⚠️ فیدهای ناموفق: {', '.join(b['errors'])}" if b["errors"] else ""
@@ -253,8 +288,8 @@ async def cmd_bulletin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if st["sorted"] < st["items"]:
             note += (f"\n⚠️ {st['items'] - st['sorted']} خبر دسته‌بندی نشد و در بولتن نیامد"
                      + (f" ({b['class_errors'][0][:150]})" if b["class_errors"] else ""))
-        await update.message.reply_text(
-            f"✅ بولتن آماده شد ({st['items']} خبر در {st['hours']} ساعت اخیر، {st['used']} خبر مرتبط در بخش‌ها):\n{counts}"
+        await reply(
+            f"✅ بولتن {brand.label} آماده شد ({st['items']} خبر در {st['hours']} ساعت اخیر، {st['used']} خبر مرتبط در بخش‌ها):\n{counts}"
             f"{note}\n\nقبل از انتشار حتماً بازبینی کنید؛ فایل دوم زیر هر خبر لینک منبع را دارد.")
         with clean.open("rb") as f:
             await ctx.bot.send_document(chat, f, filename=clean.name, caption="🗞 بولتن (برای انتشار)")
@@ -281,12 +316,12 @@ async def write_and_show(update, ctx, feedback=None):
     j = job(ctx)
     await ctx.bot.send_message(update.effective_chat.id, f"✍️ در حال نوشتن سناریو برای:\n{j['current']['title_fa']}")
     try:
-        j["pkg"] = await write_package(j["current"], feedback, j.get("pkg"))
+        j["pkg"] = await write_package(j["current"], feedback, j.get("pkg"), brand=brand_of(ctx))
     except Exception as e:
         log.exception("writer failed")
         await ctx.bot.send_message(update.effective_chat.id, f"❌ نوشتن شکست خورد:\n{e}")
         return
-    await say(update, ctx, format_package(j["pkg"], j["current"]), Markup([[
+    await say(update, ctx, format_package(j["pkg"], j["current"], brand_of(ctx)), Markup([[
         Btn("✅ تایید", callback_data="pkg_ok"), Btn("🔁 بازنویسی", callback_data="pkg_redo"),
         Btn("✏️ با توضیح من", callback_data="pkg_fb"), Btn("⏭ رد کردن", callback_data="skip")]]))
 
@@ -329,12 +364,13 @@ def _prepare(j):
     prep = j["prep"]
     work = Path(prep["work"])
     work.mkdir(parents=True, exist_ok=True)
+    brand = brands.get(j.get("brand"))
     audio, engine = _step("ساخت صدا", tts.synthesize_with_info, j["narration"], work / "narration.mp3",
-                          "edge" if j.get("preview") else None)
+                          "edge" if j.get("preview") else None, brand.voice_id or None)
     prep["voice_engine"] = engine
     spoken = _step("زمان‌بندی زیرنویس با Whisper", stt.transcribe_words, audio)
     words = stt.align_to_script(j["narration"], spoken)
-    ass = video.build_ass(words, work / "subs.ass", fmt=prep["fmt"])
+    ass = video.build_ass(words, work / "subs.ass", fmt=prep["fmt"], highlight=brand.ass_highlight())
     total = video.duration(audio) + 0.5
     prep.update(audio=str(audio), ass=str(ass), total=total,
                 sentences=editor.sentences(j["narration"], words, total))
@@ -357,8 +393,9 @@ def _render(j) -> Path:
     else:
         src = Path(j["src"])
     logo = Path(config.LOGO_PATH)
+    tpl = brands.get(j.get("brand")).path(f"template_{fmt}")
     return _step("تدوین نهایی با ffmpeg", video.build_video, src, Path(prep["audio"]), Path(prep["ass"]),
-                 work / "final.mp4", logo if logo.exists() else None, fmt=fmt)
+                 work / "final.mp4", logo if logo.exists() else None, fmt=fmt, template=tpl)
 
 
 def retry_markup(j) -> Markup:
@@ -491,7 +528,7 @@ async def render_and_send(update, ctx):
         j["outbox"].pop(old)
         (OUTBOX / f"{old}.mp4").unlink(missing_ok=True)
     await send_result(chat, ctx, key)
-    await ctx.bot.send_message(chat, final_caption(j["pkg"], j["current"]))  # full Instagram caption, ready to copy
+    await ctx.bot.send_message(chat, final_caption(j["pkg"], j["current"], brand=brand_of(ctx)))  # ready to copy
     await make_cover(update, ctx)
     await next_in_queue(update, ctx)
 
@@ -543,7 +580,8 @@ async def make_cover(update, ctx):
     covers = j.setdefault("covers", {})
     covers[key] = {"bg": str(bg), "bg_frame": str(bg), "bg_ai": None, "fmt": fmt, "title": cover_title(j["pkg"]),
                    "options": cover_options(j["pkg"]),
-                   "topic": j["pkg"].get("topic") or j.get("current", {}).get("title_fa", "")}
+                   "topic": j["pkg"].get("topic") or j.get("current", {}).get("title_fa", ""),
+                   "brand": brand_of(ctx).key}
     for old in sorted(covers)[:-10]:  # keep the last 10 covers editable
         c_old = covers.pop(old)
         for f in (c_old.get("bg_frame") or c_old["bg"], c_old.get("bg_ai")):
@@ -578,7 +616,7 @@ async def ai_cover_bg(update, ctx, key, quiet=False, extra: str | None = None, r
         await ctx.bot.send_message(chat, f"🎨 {AI_NAME()} در حال طراحی پس‌زمینه‌ی کاور…")
     try:
         await asyncio.to_thread(cover.ai_background, Path(c.get("ref") or c["bg_frame"]), c["title"], c.get("topic", ""),
-                                out, c["fmt"], c.get("design_note", ""))
+                                out, c["fmt"], c.get("design_note", ""), brands.get(c.get("brand")))
     except Exception as e:
         log.warning("AI cover background failed: %s", e)
         if not quiet or not _ai_cover_warned[0]:  # say it once, not on every cover
@@ -610,7 +648,8 @@ async def send_cover(update, ctx, key):
     c = j["covers"][key]
     out = COVER_DIR / f"{chat}_{key}.jpg"
     try:
-        await asyncio.to_thread(cover.compose, Path(c["bg"]), c["title"], out, c["fmt"])
+        await asyncio.to_thread(cover.compose, Path(c["bg"]), c["title"], out, c["fmt"],
+                                brands.get(c.get("brand")).path("cover_icon"))
     except Exception as e:
         log.exception("cover compose failed")
         await ctx.bot.send_message(chat, f"⚠️ ساخت کاور شکست خورد (ویدئو سالم است):\n{e}")
@@ -645,6 +684,14 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_reply_markup(None)
         await q.message.reply_text("📤 در حال ارسال دوباره…")
         await send_result(update.effective_chat.id, ctx, d[7:])
+        return
+    if d.startswith(("news_brand:", "bul_brand:")):
+        action, key = d.split(":", 1)
+        await q.edit_message_reply_markup(None)
+        if action == "news_brand":
+            await run_news(update, ctx, key)
+        else:
+            await run_bulletin(update, ctx, key)
         return
     if d.startswith("covdesign:"):
         key = d.split(":", 1)[1]

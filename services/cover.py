@@ -2,6 +2,7 @@
 import subprocess
 from pathlib import Path
 
+import brands
 import config
 from services.video import FORMATS, _filter_path, duration
 
@@ -114,7 +115,7 @@ def _brush(bw: int, bh: int, rgb: tuple, seed: int, out: Path) -> tuple[int, int
     return img.size
 
 
-def compose(bg: Path, title, out: Path, fmt: str = "9x16") -> Path:
+def compose(bg: Path, title, out: Path, fmt: str = "9x16", icon_path: Path | None = None) -> Path:
     """title: a string (auto-split) or a list of 1-3 lines."""
     f = FORMATS[fmt]
     w, h = f["w"], f["h"]
@@ -178,8 +179,9 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
         fc += f";[b{k}][{k + 2}:v]overlay={bx}:{by}[b{k + 1}]"
     fc += f";[b{len(brushes)}]{ass_filter}[tx]"
     logo_in = len(brushes) + 2
-    if LOGO_ICON.exists():  # small round brand icon at the bottom centre
-        cmd += ["-i", str(LOGO_ICON)]
+    icon_file = Path(icon_path or LOGO_ICON)
+    if icon_file.exists():  # small round brand icon at the bottom centre
+        cmd += ["-i", str(icon_file)]
         fc += (f";[{logo_in}:v]scale={icon}:{icon},format=rgba,"
                f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if(lte(hypot(X-W/2,Y-H/2),W/2-1),255,0)'[lg];"
                f"[tx][lg]overlay=(W-w)/2:H-h-{int(h * 0.035)}[v]")
@@ -191,18 +193,14 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
     return out
 
 
-STYLE_FILE = Path(__file__).parent.parent / "prompts" / "cover_style.md"
-
-
-def cover_style() -> str:
+def cover_style(brand=None) -> str:
     try:
-        return "\n".join(l for l in STYLE_FILE.read_text(encoding="utf-8").splitlines() if l.strip() and not l.startswith("#"))
+        return "\n".join(brands.get(getattr(brand, "key", brand)).lines("cover_style"))
     except OSError:
         return ""
 
 
-AI_PROMPT = """Design the BACKGROUND image of a news cover (vertical {ratio}) for a Persian-language oil & energy
-news channel.
+AI_PROMPT = """Design the BACKGROUND image of a news cover (vertical {ratio}) for {outlet}.
 Story headline: {headline}
 Story: {topic}
 
@@ -216,8 +214,7 @@ RULES: do NOT invent or add any other real, identifiable person. NO text, letter
 anywhere in the image (a separate step adds the headline)."""
 
 
-AI_PROMPT_TEXT = """Design the BACKGROUND image of a news cover (vertical {ratio}) for a Persian-language oil & energy
-news channel.
+AI_PROMPT_TEXT = """Design the BACKGROUND image of a news cover (vertical {ratio}) for {outlet}.
 Story headline: {headline}
 Story: {topic}
 
@@ -228,7 +225,8 @@ Show the story through places and symbols only. Do NOT show any real, identifiab
 NO text, letters, numbers, logos or watermarks anywhere in the image (a separate step adds the headline)."""
 
 
-def ai_background(frame: Path, headline: str, topic: str, out: Path, fmt: str = "9x16", extra: str = "") -> Path:
+def ai_background(frame: Path, headline: str, topic: str, out: Path, fmt: str = "9x16", extra: str = "",
+                  brand=None) -> Path:
     """The image model redesigns real material (video frame or a photo the user sent) into a cover background.
 
     No text in the image: the Persian headline banners and the logo are added by compose().
@@ -237,7 +235,9 @@ def ai_background(frame: Path, headline: str, topic: str, out: Path, fmt: str = 
     from services import llm
     f = FORMATS[fmt]
     ratio = "9:16" if fmt == "9x16" else "4:5"
-    fields = dict(ratio=ratio, headline=headline.replace("\n", " "), topic=topic or "—", style=cover_style(),
+    brand = brands.get(getattr(brand, "key", brand))
+    fields = dict(ratio=ratio, headline=headline.replace("\n", " "), topic=topic or "—", style=cover_style(brand),
+                  outlet=brand.outlet_en,
                   extra=f"\nTHE EDITOR'S INSTRUCTIONS FOR THIS COVER (follow them; they override the style):\n{extra}\n"
                   if extra else "")
     data = llm.generate_image(AI_PROMPT.format(**fields), frame.read_bytes(), ratio,

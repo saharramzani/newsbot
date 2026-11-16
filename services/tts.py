@@ -29,7 +29,8 @@ def synthesize(text: str, out_path: Path) -> Path:
     return synthesize_with_info(text, out_path)[0]
 
 
-def synthesize_with_info(text: str, out_path: Path, engine: str | None = None) -> tuple[Path, str]:
+def synthesize_with_info(text: str, out_path: Path, engine: str | None = None,
+                         voice_id: str | None = None) -> tuple[Path, str]:
     """ElevenLabs first; if its credits run out (or the key stops working) and a fallback is configured, use the
     free Microsoft Edge voice. Returns (path, engine) with engine 'elevenlabs' or 'edge'.
 
@@ -38,7 +39,7 @@ def synthesize_with_info(text: str, out_path: Path, engine: str | None = None) -
     if (engine or config.TTS_ENGINE) == "edge":
         return _edge(text, out_path), "edge"
     try:
-        return _elevenlabs(text, out_path), "elevenlabs"
+        return _elevenlabs(text, out_path, voice_id or config.ELEVENLABS_VOICE_ID), "elevenlabs"
     except ElevenLabsError as e:
         missing_key = not (config.ELEVENLABS_API_KEY and config.ELEVENLABS_VOICE_ID)
         if config.FALLBACK_TTS != "edge" or not (missing_key or e.status in FALLBACK_STATUSES):
@@ -71,16 +72,16 @@ def _edge(text: str, out_path: Path) -> Path:
     return out_path
 
 
-def _elevenlabs(text: str, out_path: Path) -> Path:
-    if not (config.ELEVENLABS_API_KEY and config.ELEVENLABS_VOICE_ID):
+def _elevenlabs(text: str, out_path: Path, voice_id: str) -> Path:
+    if not (config.ELEVENLABS_API_KEY and voice_id):
         raise ElevenLabsError("ELEVENLABS_API_KEY / ELEVENLABS_VOICE_ID not set", "invalid_api_key")
     # the same text with the same voice is never paid for twice (rebuilds, retries, a re-cut with another plan)
-    key = hashlib.sha1(f"{config.ELEVENLABS_VOICE_ID}|{config.ELEVENLABS_MODEL}|{text}".encode()).hexdigest()
+    key = hashlib.sha1(f"{voice_id}|{config.ELEVENLABS_MODEL}|{text}".encode()).hexdigest()
     cached = CACHE_DIR / f"{key}.mp3"
     if cached.exists() and cached.stat().st_size > 1000:
         shutil.copyfile(cached, out_path)
         return out_path
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{config.ELEVENLABS_VOICE_ID}"
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
     for attempt in range(4):  # network hiccups and ElevenLabs overloads are common; retry with back-off
         try:
             r = httpx.post(
