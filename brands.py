@@ -9,6 +9,8 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import config
+
 ROOT = Path(__file__).parent
 DEFAULT_FILES = {
     "topics": "prompts/scout_topics.md",
@@ -33,6 +35,7 @@ class Brand:
     voice_id: str = ""             # ElevenLabs voice; empty = ELEVENLABS_VOICE_ID from .env
     highlight: str = "#FBB816"     # subtitle colour of the word being spoken
     order: int = 0
+    bot_username: str = ""         # the outlet's own Telegram bot, for the hub menu
     files: dict = field(default_factory=dict)
 
     def path(self, name: str) -> Path:
@@ -67,8 +70,28 @@ def load_all() -> dict[str, Brand]:
 
 
 BRANDS = load_all()
-DEFAULT = next(iter(BRANDS))
+FIRST = next(iter(BRANDS))  # the first outlet (keeps e.g. the approved bulletin title without a name)
+# a single-outlet bot (BOT_MODE=brand) uses only its own outlet
+DEFAULT = config.BOT_BRAND if config.BOT_MODE == "brand" and config.BOT_BRAND in BRANDS else FIRST
 
 
 def get(key: str | None) -> Brand:
     return BRANDS.get(key or DEFAULT) or BRANDS[DEFAULT]
+
+
+def available() -> list[Brand]:
+    """Outlets this bot works for: just its own in a single-outlet bot, all of them otherwise."""
+    if config.BOT_MODE == "brand" and config.BOT_BRAND in BRANDS:
+        return [BRANDS[config.BOT_BRAND]]
+    return list(BRANDS.values())
+
+
+def allowed_users(b: Brand) -> set[int]:
+    """Who may use an outlet's bot (for the hub menu): ALLOWED_USER_IDS_<KEY> if set, else ALLOWED_USER_IDS."""
+    own = config.get(f"ALLOWED_USER_IDS_{b.key.upper()}", "")
+    return config.ids(own) if own.strip() else set(config.ALLOWED_USER_IDS)
+
+
+def bot_username(b: Brand) -> str:
+    """The outlet's own bot (for the hub menu): BOT_USERNAME_<KEY> in .env, else bot_username in brand.json."""
+    return (config.get(f"BOT_USERNAME_{b.key.upper()}", "") or b.bot_username).lstrip("@").strip()

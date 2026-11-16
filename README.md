@@ -50,3 +50,14 @@ systemctl restart newsbot
 سبک کاور، بخش‌های بولتن، قالب ۹:۱۶ و ۴:۵، آیکون کاور. فایلی که در `brand.json` نیامده از پیش‌فرض مشترک
 (`prompts/` و `assets/brand/`) برداشته می‌شود. رسانه‌ی جدید = پوشه‌ی جدید؛ بعد از اضافه کردن، ربات را ری‌استارت کنید.
 با `/news` و `/bulletin` ربات می‌پرسد برای کدام رسانه؛ منابع خبری و کلیدها مشترک‌اند.
+
+## چند ربات: News Room (ربات مادر) + یک ربات برای هر رسانه
+یک کد و یک سرور؛ هر ربات یک سرویس جداست. روی سرور (root):
+```
+python3 /opt/newsbot/deploy/bots.py main avayenaft              # ربات فعلی = فقط آوای نفت
+python3 /opt/newsbot/deploy/bots.py add aghaye aghaye_eghtesad  # ربات جدید آقای اقتصاد (توکن را پنهان می‌پرسد)
+python3 /opt/newsbot/deploy/bots.py add newsroom hub            # ربات مادر؛ ربات‌های رسانه‌ها را خودش پیدا می‌کند
+python3 /opt/newsbot/deploy/bots.py status
+```
+- دسترسی جدا برای هر رسانه (اختیاری، در `/opt/newsbot/.env`): `ALLOWED_USER_IDS_AGHAYE_EGHTESAD=...` — ربات مادر به هر کاربر فقط رسانه‌های مجازش را نشان می‌دهد.
+- به‌روزرسانی همه‌ی ربات‌ها: `cd ~/newsbot && git pull && bash deploy/install.sh && systemctl restart newsbot 'newsbot@*'`

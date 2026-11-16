@@ -22,6 +22,8 @@ chown -R newsbot:newsbot "$DEST"
 chmod 600 .env
 
 cp deploy/newsbot.service /etc/systemd/system/newsbot.service
+cp deploy/newsbot@.service /etc/systemd/system/newsbot@.service   # extra bots: python3 deploy/bots.py
+mkdir -p "$DEST/bots" && chown newsbot:newsbot "$DEST/bots" && chmod 700 "$DEST/bots"
 systemctl daemon-reload
 systemctl enable newsbot
 

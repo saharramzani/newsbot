@@ -48,6 +48,19 @@ NEWS_MIN_IMPORTANCE = int(get("NEWS_MIN_IMPORTANCE", "4"))  # /news shows items 
 BULLETIN_HOURS = int(get("BULLETIN_HOURS", "24"))     # news window of the /bulletin command
 BULLETIN_FONT = get("BULLETIN_FONT", "B Nazanin")     # font of the Word bulletin
 ALLOWED_USER_IDS = {int(x) for x in get("ALLOWED_USER_IDS", "").split(",") if x.strip()}
+
+
+def ids(text: str) -> set[int]:
+    return {int(x) for x in text.split(",") if x.strip()}
+
+
+# One code base, several Telegram bots:
+#   multi = one bot that asks which outlet (default)
+#   brand = a bot for one outlet only (BOT_BRAND = folder name in brands/, e.g. aghaye_eghtesad)
+#   hub   = the "mother" bot: a menu that opens each outlet's own bot
+BOT_MODE = get("BOT_MODE", "multi").lower()
+BOT_BRAND = get("BOT_BRAND", "")
+BOT_NAME = get("BOT_NAME", "")  # optional: the bot's display name in Telegram is set to this at startup
 # Netscape-format cookies of a logged-in browser, for yt-dlp (Instagram, and YouTube on servers)
 YTDLP_COOKIES = get("YTDLP_COOKIES", "cookies.txt")
 WORK_DIR = Path(get("WORK_DIR", "work"))

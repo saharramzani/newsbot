@@ -42,7 +42,7 @@ def brand_of(ctx) -> brands.Brand:
 
 
 def brand_keyboard(action: str) -> Markup:
-    return Markup([[Btn(b.label, callback_data=f"{action}:{b.key}")] for b in brands.BRANDS.values()])
+    return Markup([[Btn(b.label, callback_data=f"{action}:{b.key}")] for b in brands.available()])
 
 
 # ---------- helpers ----------
@@ -72,7 +72,7 @@ def mark(item) -> str:
 def format_news(items, all_view: bool = False, brand=None) -> str:
     head = (f"📋 همه‌ی {len(items)} خبر (🔥 = خیلی مهم، ⭐ = مهم)" if all_view
             else f"📰 {len(items)} خبر مهم (مهم‌ترین اول؛ 🔥 = خیلی مهم)")
-    if brand and len(brands.BRANDS) > 1:
+    if brand and len(brands.available()) > 1:
         head = f"{brand.label} | " + head
     out = [head + "\n"]
     for i, it in enumerate(items, 1):
@@ -189,7 +189,9 @@ async def say(update_or_q, ctx, text, markup=None):
 
 # ---------- commands ----------
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("سلام 👋\n/news ← جست‌وجوی خبرهای مهم\n/list ← برگشت به همان لیست اخبار (بدون جست‌وجوی دوباره)\n"
+    own = brands.available()
+    hello = f"سلام 👋 این‌جا ربات {own[0].label} است." if len(own) == 1 else "سلام 👋"
+    await update.message.reply_text(hello + "\n/news ← جست‌وجوی خبرهای مهم\n/list ← برگشت به همان لیست اخبار (بدون جست‌وجوی دوباره)\n"
                                     "/bulletin ← ساخت بولتن خبری (فایل Word)\n/cancel ← لغو کار جاری")
 
 
@@ -213,7 +215,7 @@ async def cmd_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_news(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if len(brands.BRANDS) > 1:
+    if len(brands.available()) > 1:
         await update.message.reply_text("برای کدام رسانه؟", reply_markup=brand_keyboard("news_brand"))
         return
     await run_news(update, ctx, brands.DEFAULT)
@@ -245,7 +247,7 @@ TEHRAN = timezone(timedelta(hours=3, minutes=30))
 
 
 async def cmd_bulletin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if len(brands.BRANDS) > 1:
+    if len(brands.available()) > 1:
         await update.message.reply_text("بولتن کدام رسانه؟", reply_markup=brand_keyboard("bul_brand"))
         return
     await run_bulletin(update, ctx, brands.DEFAULT)
@@ -278,7 +280,7 @@ async def run_bulletin(update, ctx, brand_key: str):
         folder.mkdir(parents=True, exist_ok=True)
         jy, jm, jd = docx_out.to_jalali(when.year, when.month, when.day)
         stem = f"bulletin_{brand.key}_{jy}-{jm:02d}-{jd:02d}_{when:%H%M}"
-        name = "" if brand.key == brands.DEFAULT else brand.name  # the first outlet keeps the approved title
+        name = "" if brand.key == brands.FIRST else brand.name  # the first outlet keeps the approved title
         clean = docx_out.write(b, folder / f"{stem}.docx", when, outlet=name)
         review = docx_out.write(b, folder / f"{stem}_links.docx", when, with_links=True, outlet=name)
         counts = "\n".join(f"• {s['title']}: {len(s['entries'])}" for s in b["sections"])
@@ -1043,8 +1045,36 @@ async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE):
             pass
 
 
+# ---------- hub ("mother") bot ----------
+async def hub_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """News Room: a menu that opens the bot of each outlet this user may use."""
+    uid = update.effective_user.id
+    rows = []
+    for b in brands.BRANDS.values():
+        name = brands.bot_username(b)
+        if name and uid in brands.allowed_users(b):
+            rows.append([Btn(b.label, url=f"https://t.me/{name}?start=hub")])
+    if not rows:
+        await update.effective_message.reply_text("هنوز به ربات هیچ رسانه‌ای دسترسی ندارید.")
+        return
+    await update.effective_message.reply_text(
+        "🗞 برای کدام رسانه کار می‌کنید؟\n(دکمه، ربات همان رسانه را باز می‌کند؛ بار اول یک‌بار «Start» را بزنید.)",
+        reply_markup=Markup(rows))
+
+
 async def set_menu(app):
     """The command menu next to the message box (so it never has to be set by hand in BotFather)."""
+    if config.BOT_NAME:
+        try:
+            await app.bot.set_my_name(config.BOT_NAME)
+        except Exception:
+            log.exception("could not set the bot name")
+    if config.BOT_MODE == "hub":
+        try:
+            await app.bot.set_my_commands([BotCommand("start", "انتخاب رسانه")])
+        except Exception:
+            log.exception("could not set the command menu")
+        return
     try:
         await app.bot.set_my_commands([
             BotCommand("news", "جست‌وجوی خبرهای مهم"),
@@ -1074,6 +1104,17 @@ def main():
            .connect_timeout(30).read_timeout(60).write_timeout(60).pool_timeout(30).media_write_timeout(600)
            .rate_limiter(AIORateLimiter(max_retries=5))
            .persistence(PicklePersistence(filepath=config.WORK_DIR / "state.pickle")).post_init(set_menu).build())
+    if config.BOT_MODE == "hub":  # the mother bot only shows the outlet menu
+        everyone = set(config.ALLOWED_USER_IDS).union(*(brands.allowed_users(b) for b in brands.BRANDS.values()))
+        hub_users = filters.User(user_id=list(everyone))
+        app.add_handler(MessageHandler(hub_users, hub_start))
+        app.add_error_handler(on_error)
+        log.info("hub bot: %s", ", ".join(f"{b.key}=@{brands.bot_username(b) or '?'}" for b in brands.BRANDS.values()))
+        app.run_polling()
+        return
+    if config.BOT_MODE == "brand" and config.BOT_BRAND not in brands.BRANDS:
+        raise SystemExit(f"BOT_BRAND={config.BOT_BRAND!r} is not a folder in brands/ ({', '.join(brands.BRANDS)})")
+    log.info("bot for: %s", ", ".join(b.name for b in brands.available()))
     allowed = filters.User(user_id=list(config.ALLOWED_USER_IDS))
     app.add_handler(CommandHandler("start", cmd_start, filters=allowed))
     app.add_handler(CommandHandler("news", cmd_news, filters=allowed))
