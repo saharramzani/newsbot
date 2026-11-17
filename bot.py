@@ -788,7 +788,8 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         download.fresh_dir(media_root(update))
         await q.message.reply_text(
             "🎞 ویدئوها و عکس‌های این خبر را بفرستید؛ هر تعداد که خواستید، به همان ترتیبی که باید پخش شوند:\n"
-            "• لینک ویدئو (چند لینک در یک پیام هم می‌شود)\n• فایل ویدئو یا عکس (سقف هر فایل ~۲۰MB)\n\n"
+            "• لینک ویدئو یا عکس، پست عکس اینستاگرام (چندعکسی هم)، یا لینک صفحه‌ی خبر (چند لینک در یک پیام هم می‌شود)\n"
+            "• فایل ویدئو یا عکس (سقف هر فایل ~۲۰MB)\n\n"
             "هر وقت تمام شد، دکمه‌ی «✅ تمام شد» را بزنید.")
     elif d == "media_done":
         if j.get("stage") != "link":
@@ -990,9 +991,16 @@ async def _collect(update, ctx, label: str, fetch, note: str | None = None):
     await media_status(update, ctx)
     try:
         d = download.fresh_dir(media_root(update) / str(time.time_ns()))
-        path, kind = await fetch(d)
-        dur = await asyncio.to_thread(download.check_video, path) if kind == "video" else 0.0
-        slot.update(path=str(path), kind=kind, dur=dur)  # a description typed while downloading stays on the slot
+        got = await fetch(d)
+        got = got if isinstance(got, list) else [got]  # a photo post / carousel gives several files
+        at = j["media"].index(slot) if slot in j.get("media", []) else len(j.get("media", []))
+        for k, (path, kind) in enumerate(got):
+            dur = await asyncio.to_thread(download.check_video, path) if kind == "video" else 0.0
+            if k == 0:  # a description typed while downloading stays on the first slot
+                slot.update(path=str(path), kind=kind, dur=dur)
+            elif slot in j.get("media", []):  # the rest go right after it, in post order
+                j["media"].insert(at + k, {"path": str(path), "kind": kind, "dur": dur, "id": time.time_ns(),
+                                           "note": None})
     except Exception as e:
         log.exception("media fetch failed")
         if slot in j.get("media", []):
@@ -1005,9 +1013,9 @@ async def _collect(update, ctx, label: str, fetch, note: str | None = None):
 
 
 async def add_link(update, ctx, url: str, note: str | None = None):
-    async def fetch(d):
-        return await asyncio.to_thread(download.download_video, url, d), "video"
-    await _collect(update, ctx, f"ویدئوی این لینک ({url[:60]})", fetch, note)
+    async def fetch(d):  # video, photo link, photo post/carousel or a news page's main picture
+        return await asyncio.to_thread(download.fetch_link, url, d)
+    await _collect(update, ctx, f"محتوای این لینک ({url[:60]})", fetch, note)
 
 
 async def on_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
