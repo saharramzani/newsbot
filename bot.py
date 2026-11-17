@@ -138,6 +138,21 @@ def format_package(pkg: dict, item: dict | None = None, brand=None) -> str:
             f"موارد نیازمند بررسی شما:\n{flags}")
 
 
+def format_web(pkg: dict) -> str:
+    """The website news text (inverted pyramid), ready to copy into the site."""
+    w = pkg.get("web_article")
+    if not isinstance(w, dict) or not (w.get("title") or w.get("lead")):
+        return ""
+    body = w.get("body") or []
+    body = body if isinstance(body, list) else [str(body)]
+    tags = "، ".join(str(t).lstrip("#") for t in (w.get("tags") or []))
+    parts = [f"روتیتر: {w.get('rootitr', '')}".strip(), f"تیتر: {w.get('title', '')}", "",
+             f"لید: {w.get('lead', '')}", ""] + [x for b in body if str(b).strip() for x in (str(b).strip(), "")]
+    if tags:
+        parts += ["", f"کلیدواژه‌ها: {tags}"]
+    return "\n".join(parts).replace("\n\n\n", "\n\n").strip()
+
+
 def _format_package_old(pkg: dict, item: dict | None = None, brand=None) -> str:
     scenes = "\n".join(f"• {s.get('time', '')} | {s.get('visual', '')} | «{s.get('text_on_screen', '')}»"
                        for s in pkg.get("scenario", []))
@@ -323,9 +338,13 @@ async def write_and_show(update, ctx, feedback=None):
         log.exception("writer failed")
         await ctx.bot.send_message(update.effective_chat.id, f"❌ نوشتن شکست خورد:\n{e}")
         return
-    await say(update, ctx, format_package(j["pkg"], j["current"], brand_of(ctx)), Markup([[
+    buttons = Markup([[
         Btn("✅ تایید", callback_data="pkg_ok"), Btn("🔁 بازنویسی", callback_data="pkg_redo"),
-        Btn("✏️ با توضیح من", callback_data="pkg_fb"), Btn("⏭ رد کردن", callback_data="skip")]]))
+        Btn("✏️ با توضیح من", callback_data="pkg_fb"), Btn("⏭ رد کردن", callback_data="skip")]])
+    web = format_web(j["pkg"])
+    await say(update, ctx, format_package(j["pkg"], j["current"], brand_of(ctx)), None if web else buttons)
+    if web:  # the website text (inverted pyramid) as its own message, ready to copy; the buttons go under it
+        await say(update, ctx, "📰 متن خبر برای سایت (هرم وارونه)\n\n" + web, buttons)
 
 
 async def ask_narration_approval(update, ctx):
@@ -531,6 +550,8 @@ async def render_and_send(update, ctx):
         (OUTBOX / f"{old}.mp4").unlink(missing_ok=True)
     await send_result(chat, ctx, key)
     await ctx.bot.send_message(chat, final_caption(j["pkg"], j["current"], brand=brand_of(ctx)))  # ready to copy
+    if format_web(j["pkg"]):
+        await say(update, ctx, "📰 متن خبر برای سایت\n\n" + format_web(j["pkg"]))
     await make_cover(update, ctx)
     await next_in_queue(update, ctx)
 
