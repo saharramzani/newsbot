@@ -31,9 +31,14 @@ OUTPUT_SPEC = """
 """
 
 
+MULTI_SOURCE = """
+اگر «خبر ورودی» فیلد sources دارد، یعنی چند رسانه همین خبر را منتشر کرده‌اند و به ترتیب زمان انتشار مرتب شده‌اند (اولی، اول منتشر کرده). از متن همه‌ی آن‌ها استفاده کن و هر جا منبع را می‌آوری (references، لید و متن سایت، کپشن) آن‌ها را به همان ترتیب بیاور؛ لید سایت: «به گزارش {outlet} به نقل از [منبع اول]، …» و منابع بعدی در متن («… [منبع دوم] نیز گزارش داد …»).
+"""
+
+
 async def write_package(news: dict, feedback: str | None = None, previous: dict | None = None, brand=None) -> dict:
     brand = brands.get(getattr(brand, "key", brand))
-    system = brand.text("writer_style") + OUTPUT_SPEC.replace("{hashtag}", brand.hashtag).replace("{outlet}", brand.name)
+    system = brand.text("writer_style") + (OUTPUT_SPEC + MULTI_SOURCE).replace("{hashtag}", brand.hashtag).replace("{outlet}", brand.name)
     user = "خبر ورودی:\n" + json.dumps(news, ensure_ascii=False, indent=2)
     if previous and feedback:
         user += "\n\nنسخه‌ی قبلی:\n" + json.dumps(previous, ensure_ascii=False)

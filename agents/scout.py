@@ -156,6 +156,68 @@ async def _translate(batch: list[dict], offset: int, topics: str, brand) -> dict
     return {p["id"]: p for p in _extract_json(text) if isinstance(p, dict) and isinstance(p.get("id"), int)}
 
 
+CLUSTER = """You find duplicate news. Below are numbered headlines from different outlets (Persian translation |
+original). Group together the items that report the SAME specific event, statement or data release (same actors,
+same action, same moment), not merely the same topic. Reply with ONLY a JSON array of groups, each group an array
+of ids; list only groups with 2 or more items. Example: [[3, 17, 42], [5, 9]]"""
+CLUSTER_MAX = 160  # items compared in one call (the important ones first)
+
+
+async def merge_duplicates(items: list[dict]) -> list[dict]:
+    """One item per story, with every outlet that reported it, in order of publication (first publisher first).
+
+    Two signals are combined: the per-batch event slug from the translation step, and one grouping pass over all
+    candidate headlines together (batches alone miss duplicates that landed in different batches).
+    """
+    parent = list(range(len(items)))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        parent[find(a)] = find(b)
+
+    by_slug = {}
+    for k, i in enumerate(items):
+        if i.get("event"):
+            if i["event"] in by_slug:
+                union(k, by_slug[i["event"]])
+            by_slug.setdefault(i["event"], k)
+    cand = sorted((k for k, i in enumerate(items) if i["importance"] >= 3), key=lambda k: -items[k]["importance"])
+    cand = cand[:CLUSTER_MAX]
+    if len(cand) > 1:
+        listing = "\n".join(f"{k}. [{items[k]['source']}] {items[k]['title_fa']} | {items[k]['title_en']}" for k in cand)
+        try:
+            text, _ = await asyncio.to_thread(llm.generate, CLUSTER, listing, False, 3000)
+            for group in _extract_json(text):
+                ids = [x for x in (group if isinstance(group, list) else []) if isinstance(x, int) and 0 <= x < len(items)]
+                for x in ids[1:]:
+                    union(ids[0], x)
+        except Exception:
+            pass  # grouping is a nicety; without it the list just shows the duplicates
+    groups = {}
+    for k in range(len(items)):
+        groups.setdefault(find(k), []).append(items[k])
+    merged = []
+    for members in groups.values():
+        members.sort(key=lambda i: i["published_iso"])  # first publisher first
+        best = max(members, key=lambda i: (i["importance"], len(i["snippet"])))
+        item = dict(best)
+        item["importance"] = max(i["importance"] for i in members)
+        item["sources"] = [{"source": i["source"], "url": i["url"], "published": i["published"],
+                            "published_iso": i["published_iso"], "title_en": i["title_en"], "snippet": i["snippet"]}
+                           for i in members]
+        first = members[0]
+        item.update(source=first["source"], url=first["url"], published=first["published"],
+                    published_iso=first["published_iso"], hours_ago_estimate=first["hours_ago_estimate"])
+        merged.append(item)
+    merged.sort(key=lambda i: i["published_iso"], reverse=True)  # newest first; sorted by importance afterwards
+    return merged
+
+
 async def find_news(hours: int | None = None, brand=None) -> tuple[list[dict], list[dict]]:
     """ALL items from the feeds in the time window (newest first), headlines translated to Persian.
 
@@ -206,24 +268,10 @@ async def find_news(hours: int | None = None, brand=None) -> tuple[list[dict], l
             "hours_ago_estimate": f"{age:.0f} ساعت پیش", "time_confidence": "high",
             "url": src["url"], "summary_fa": "", "snippet": src["snippet"],
             "importance": int(t["importance"]) if isinstance(t.get("importance"), (int, float)) else 0,
-            "event": str(t.get("event", "")).strip().lower(), "also": [],
+            "event": str(t.get("event", "")).strip().lower(),
+            "published_iso": src["published"].isoformat(),
         })
-    # one item per event: keep the highest-scored (then most detailed) report, remember the other sources
-    best = {}
-    for i in out:
-        if not i["event"]:
-            continue
-        b = best.get(i["event"])
-        if b is None or (i["importance"], len(i["snippet"])) > (b["importance"], len(b["snippet"])):
-            best[i["event"]] = i
-    merged = []
-    for i in out:
-        b = best.get(i["event"]) if i["event"] else None
-        if b is not None and b is not i:
-            b["also"].append(i["source"])
-        else:
-            merged.append(i)
-    out = merged
+    out = await merge_duplicates(out)
     # most important first, newest first within the same score; untranslated items (score 0) stay visible in "show all"
     out.sort(key=lambda i: -i["importance"])
     for i in out:

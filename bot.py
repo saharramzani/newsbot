@@ -32,6 +32,9 @@ log = logging.getLogger("newsbot")
 URL_RE = re.compile(r"https?://\S+")
 
 
+TEHRAN = timezone(timedelta(hours=3, minutes=30))
+
+
 def job(ctx) -> dict:
     return ctx.user_data.setdefault("job", {})
 
@@ -69,6 +72,33 @@ def mark(item) -> str:
     return "🔥" if imp >= 5 else "⭐" if imp == 4 else ""
 
 
+def _tehran_hm(iso: str) -> str:
+    try:
+        return datetime.fromisoformat(iso).astimezone(TEHRAN).strftime("%H:%M")
+    except Exception:
+        return "?"
+
+
+def item_sources(it: dict) -> list[dict]:
+    """The outlets that reported this story, first publisher first (old items: just their own source)."""
+    return it.get("sources") or [{"source": it.get("source", ""), "url": it.get("url", ""),
+                                  "published_iso": it.get("published_iso", "")}]
+
+
+def sources_block(it: dict) -> str:
+    srcs, seen = [], set()
+    for x in item_sources(it):  # each outlet once, at its first publication
+        if source_fa(x) not in seen:
+            seen.add(source_fa(x))
+            srcs.append(x)
+    if len(srcs) == 1:
+        s0 = srcs[0]
+        return f"   {source_fa(s0)} | {it.get('hours_ago_estimate', '?')}\n   {s0['url']}"
+    chain = " ← ".join(f"{source_fa(x)} {_tehran_hm(x.get('published_iso', ''))}" for x in srcs)
+    links = "\n".join(f"   🔗 {source_fa(x)}: {x['url']}" for x in srcs)
+    return f"   منابع به ترتیب انتشار ({len(srcs)}): {chain}\n{links}"
+
+
 def format_news(items, all_view: bool = False, brand=None) -> str:
     head = (f"📋 همه‌ی {len(items)} خبر (🔥 = خیلی مهم، ⭐ = مهم)" if all_view
             else f"📰 {len(items)} خبر مهم (مهم‌ترین اول؛ 🔥 = خیلی مهم)")
@@ -77,9 +107,7 @@ def format_news(items, all_view: bool = False, brand=None) -> str:
     out = [head + "\n"]
     for i, it in enumerate(items, 1):
         m = mark(it)
-        also = f" (+{len(it['also'])} منبع دیگر)" if it.get("also") else ""
-        out.append(f"{i}. {m + ' ' if m else ''}{it['title_fa']}\n   {it['source']}{also} | {it.get('hours_ago_estimate', '?')}"
-                   f"\n   {it['url']}\n")
+        out.append(f"{i}. {m + ' ' if m else ''}{it['title_fa']}\n{sources_block(it)}\n")
     return "\n".join(out)
 
 
@@ -101,8 +129,12 @@ async def show_news(update, ctx, all_view: bool = False):
 
 def final_caption(pkg: dict, item: dict, limit: int = 2200, brand=None) -> str:
     """Caption + mandatory source line + hashtags. The caption body is shortened if needed, never the source."""
-    src = source_fa(item)
-    source_line = f"📌 منبع: {src}" if src else ""
+    names = []
+    for x in item_sources(item):
+        n = source_fa(x)
+        if n and n not in names:
+            names.append(n)
+    source_line = (f"📌 منبع: {names[0]}" if len(names) == 1 else f"📌 منابع: {'، '.join(names)}") if names else ""
     tags = [t if t.startswith("#") else "#" + t for t in (str(x).strip().replace(" ", "_") for x in pkg.get("hashtags", [])) if t]
     brand_tag = brands.get(getattr(brand, "key", brand)).hashtag
     tags = " ".join(([brand_tag] if brand_tag else []) + [t for t in tags if t != brand_tag])
@@ -258,7 +290,6 @@ async def run_news(update, ctx, brand_key: str):
 
 
 # ---------- daily bulletin ----------
-TEHRAN = timezone(timedelta(hours=3, minutes=30))
 
 
 async def cmd_bulletin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
