@@ -29,11 +29,11 @@ def build_ass(words: list[dict], path: Path, group: int = 3, fmt: str = "9x16", 
 ScriptType: v4.00+
 PlayResX: {f["w"]}
 PlayResY: {f["h"]}
-WrapStyle: 2
+WrapStyle: 0
 
 [V4+ Styles]
 Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
-Style: Default,{config.SUBTITLE_FONT},78,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,6,2,2,80,110,{f["sub_bottom"]},-1
+Style: Default,{config.SUBTITLE_FONT},{config.SUBTITLE_SIZE},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,{max(6, config.SUBTITLE_SIZE // 13)},2,2,70,100,{f["sub_bottom"]},-1
 
 [Events]
 Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text

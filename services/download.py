@@ -97,7 +97,7 @@ def _download(url: str, out_dir: Path) -> Path:
 
 
 LOGIN_SIGNS = ("login required", "rate-limit reached", "empty media response", "sign in to confirm",
-               "not a bot", "cookies", "private", "401", "403")
+               "not a bot", "cookies", "private", "401", "403", "redirect to login", "accounts/login", "challenge")
 
 
 def _hint(url: str, stderr: str) -> str:
@@ -149,9 +149,9 @@ def _gallery(url: str, out_dir: Path) -> list[Path]:
     if cookies.is_file():
         cmd += ["--cookies", str(cookies)]
     r = subprocess.run(cmd + [url], capture_output=True, text=True, timeout=300)
-    files = sorted((f for f in out_dir.iterdir() if f.suffix.lower() in IMAGE_EXT + VIDEO_EXT), key=lambda f: f.name)
+    files = sorted((f for f in out_dir.iterdir() if f.suffix.lower() in IMAGE_EXT + VIDEO_EXT), key=lambda f: _natural(f.name))
     if not files:
-        raise RuntimeError("gallery-dl: " + (r.stderr or r.stdout)[-400:])
+        raise RuntimeError((r.stderr or r.stdout or f"exit code {r.returncode}, no files")[-400:])
     return files
 
 
@@ -178,30 +178,48 @@ def _page_image(url: str, out_dir: Path) -> Path:
     raise RuntimeError("این صفحه نه ویدئو داشت نه عکس اصلی.")
 
 
+def _is_post(url: str) -> bool:
+    """Instagram post links (/p/...) can be a single photo, a video, or a carousel of several pages."""
+    return "instagram.com/" in url and "/p/" in url
+
+
+def _video_step(url, out_dir):
+    return [(download_video(url, out_dir), "video")]
+
+
 def fetch_link(url: str, out_dir: Path) -> list[tuple[Path, str]]:
     """Any link -> [(file, 'video' | 'photo'), ...] in order.
 
-    Direct image link -> that image. Otherwise the video (yt-dlp). If the link has no video: the photos/videos of
-    the post (Instagram carousel etc., via gallery-dl), else the main picture of the page.
+    Direct image link -> that image. Instagram post (/p/): every page of the post (photos and videos, in order)
+    via gallery-dl first, the video downloader as fallback. Other links: the video first; if there is none, the
+    post's photos (gallery-dl), else the main picture of a news page. If everything fails, the error says why
+    for each tool.
     """
     url = clean_url(url)
     fresh_dir(out_dir)
     if url.lower().split("?", 1)[0].endswith(IMAGE_EXT):
         return [(download_image(url, out_dir), "photo")]
-    try:
-        return [(download_video(url, out_dir), "video")]
-    except RuntimeError as video_err:
-        if "429" in str(video_err) or "ffmpeg پیدا نشد" in str(video_err):
-            raise
-        tries = []
-        for step in (_gallery_step, _page_step):
-            try:
-                found = step(url, fresh_dir(out_dir))
-                if found:
-                    return found
-            except Exception as e:
-                tries.append(str(e)[:200])
-        raise RuntimeError(f"{video_err}\n\n(عکس هم پیدا نشد: {' | '.join(tries)})")
+    steps = ([("دانلود پست (gallery-dl)", _gallery_step), ("دانلود ویدئو (yt-dlp)", _video_step)] if _is_post(url)
+             else [("دانلود ویدئو (yt-dlp)", _video_step), ("دانلود پست (gallery-dl)", _gallery_step)])
+    steps.append(("عکس صفحه", _page_step))
+    errors = []
+    for label, step in steps:
+        try:
+            found = step(url, fresh_dir(out_dir))
+            if found:
+                return found
+        except Exception as e:
+            if "ffmpeg پیدا نشد" in str(e):
+                raise
+            errors.append(f"• {label}: {str(e)[-350:]}")
+    hint = _hint(url, "\n".join(errors))
+    raise RuntimeError(hint + "\n".join(errors))
+
+
+def _natural(name: str):
+    """'post_2.jpg' before 'post_10.jpg' (carousel pages in order)."""
+    import re
+    return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", name)]
 
 
 def _gallery_step(url, out_dir):

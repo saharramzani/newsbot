@@ -43,6 +43,7 @@ EDGE_VOICE = get("EDGE_VOICE", "fa-IR-FaridNeural")  # or fa-IR-DilaraNeural (fe
 EDGE_RATE = get("EDGE_RATE", "+5%")
 LOGO_PATH = get("LOGO_PATH", "assets/logo.png")
 SUBTITLE_FONT = get("SUBTITLE_FONT", "Vazirmatn")
+SUBTITLE_SIZE = int(get("SUBTITLE_SIZE", "100"))  # subtitle font size on a 1080-wide video (was 78)
 NEWS_WINDOW_HOURS = int(get("NEWS_WINDOW_HOURS", "12"))
 NEWS_MIN_IMPORTANCE = int(get("NEWS_MIN_IMPORTANCE", "4"))  # /news shows items scored at least this (1-5)
 BULLETIN_HOURS = int(get("BULLETIN_HOURS", "24"))     # news window of the /bulletin command
