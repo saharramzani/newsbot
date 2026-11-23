@@ -422,7 +422,8 @@ def _prepare(j):
     prep["voice_engine"] = engine
     spoken = _step("زمان‌بندی زیرنویس با Whisper", stt.transcribe_words, audio)
     words = stt.align_to_script(j["narration"], spoken)
-    ass = video.build_ass(words, work / "subs.ass", fmt=prep["fmt"], highlight=brand.ass_highlight())
+    ass = video.build_ass(words, work / "subs.ass", group=config.SUBTITLE_WORDS, fmt=prep["fmt"],
+                          highlight=brand.ass_highlight())
     total = video.duration(audio) + 0.5
     prep.update(audio=str(audio), ass=str(ass), total=total,
                 sentences=editor.sentences(j["narration"], words, total))
