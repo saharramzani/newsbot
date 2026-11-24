@@ -248,15 +248,25 @@ async def find_news(hours: int | None = None, brand=None) -> tuple[list[dict], l
     topics = load_topics(brand)
     sem = asyncio.Semaphore(3)  # stay under the free-tier requests-per-minute limit
 
+    batch_errors = []
+
     async def run(start):
         async with sem:
-            try:
-                return await _translate(recent[start:start + BATCH], start, topics, brand)
-            except Exception:
-                return {}
+            for attempt in range(2):  # a failed batch is retried once; failures are reported, never hidden
+                try:
+                    return await _translate(recent[start:start + BATCH], start, topics, brand)
+                except Exception as e:
+                    err = str(e)
+                    if attempt == 0:
+                        await asyncio.sleep(5)
+            batch_errors.append(err[:300])
+            return {}
     translated = {}
     for part in await asyncio.gather(*(run(s) for s in range(0, len(recent), BATCH))):
         translated.update(part)
+    if not translated:  # nothing scored: say why instead of "no important news"
+        raise RuntimeError("هوش مصنوعی به ترجمه و نمره‌دهی خبرها جواب نداد، پس لیست ساخته نشد. دلیل: "
+                           + (batch_errors[0] if batch_errors else "پاسخ خالی") + "\nچند دقیقه بعد دوباره /news بزنید.")
 
     out = []
     for k, src in enumerate(recent):
@@ -280,7 +290,8 @@ async def find_news(hours: int | None = None, brand=None) -> tuple[list[dict], l
     notes = [{"title": f"بازه‌ی جست‌وجو: {window} ساعت اخیر؛ از {len(out)} خبر ({n_feeds - len(errors)} فید)، "
                        f"{n_imp} خبر مهم انتخاب شد (نمره‌ی اهمیت {config.NEWS_MIN_IMPORTANCE} از ۵ یا بیشتر)", "uri": ""}]
     if len(translated) < len(recent):
-        notes.append({"title": f"⚠️ {len(recent) - len(translated)} تیتر ترجمه نشد و به زبان اصلی آمده", "uri": ""})
+        notes.append({"title": f"⚠️ {len(recent) - len(translated)} خبر به خاطر خطای هوش مصنوعی ترجمه و نمره‌دهی نشد "
+                               f"(در «نمایش همه» به زبان اصلی آمده‌اند): {(batch_errors or ['؟'])[0][:150]}", "uri": ""})
     if errors:
         notes.append({"title": "فیدهای ناموفق: " + ", ".join(errors), "uri": ""})
     return out, notes

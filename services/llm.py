@@ -12,7 +12,14 @@ GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:ge
 def generate(system: str, user: str, search: bool = False, max_tokens: int = 4000) -> tuple[str, list[dict]]:
     """Blocking call. Returns (text, sources) where sources = [{'title','uri'}] from search grounding."""
     if config.LLM_PROVIDER == "gemini":
-        return _gemini(system, user, search, max_tokens)
+        try:
+            return _gemini(system, user, search, max_tokens)
+        except LLMUnavailable:
+            if not (config.OPENAI_API_KEY and config.LLM_FALLBACK):
+                raise
+            return _openai_chat(system, [user], max_tokens), []
+    if config.LLM_PROVIDER == "openai":
+        return _openai_chat(system, [user], max_tokens), []
     if config.LLM_PROVIDER == "anthropic":
         return _anthropic(system, user, search, max_tokens)
     raise RuntimeError(f"Unknown LLM_PROVIDER: {config.LLM_PROVIDER}")
@@ -22,36 +29,78 @@ _pace_lock = threading.Lock()
 _last_call = [0.0]
 
 
-def _gemini_post(body: dict, timeout: int = 180) -> httpx.Response:
-    """POST to Gemini, paced under the free-tier requests-per-minute limit, retrying 429/5xx.
+class LLMUnavailable(RuntimeError):
+    """Every configured model failed (retired, overloaded, out of quota)."""
 
-    On 429 Gemini says how long to wait (RetryInfo.retryDelay); we wait that long instead of guessing.
+
+_dead_models: set[str] = set()  # answered 404 (retired / not available to this key): skipped from then on
+_cool_until: dict[str, float] = {}  # overloaded / out of quota: tried last for a while
+COOLDOWN = 600
+
+
+def gemini_models() -> list[str]:
+    """GEMINI_MODEL first, then GEMINI_FALLBACK_MODELS; retired ones skipped, busy ones moved to the end."""
+    out = []
+    for m in [config.GEMINI_MODEL] + config.GEMINI_FALLBACK_MODELS:
+        if m and m not in out and m not in _dead_models:
+            out.append(m)
+    now = time.monotonic()
+    return sorted(out, key=lambda m: _cool_until.get(m, 0) > now)  # stable: keeps the configured order
+
+
+def _gemini_post(body: dict, timeout: int = 180) -> httpx.Response:
+    """POST to Gemini, trying each model in turn.
+
+    Per model: paced under the free-tier requests-per-minute limit, 429/5xx retried a few times (waiting as long as
+    Gemini's RetryInfo asks). A model that is retired (404), keeps failing, or is out of quota hands over to the next
+    model. If all fail, LLMUnavailable says why for each.
     """
     gap = 60.0 / max(1, config.GEMINI_RPM)
-    r = None
-    for attempt in range(6):
-        with _pace_lock:  # calls from parallel threads queue up here
-            wait = _last_call[0] + gap - time.monotonic()
-            if wait > 0:
-                time.sleep(wait)
-            _last_call[0] = time.monotonic()
-        r = httpx.post(GEMINI_URL.format(model=config.GEMINI_MODEL),
-                       headers={"x-goog-api-key": config.GEMINI_API_KEY},  # proxy-injected secret may overwrite this
-                       json=body, timeout=timeout)
-        if r.status_code not in (429, 500, 502, 503, 504) or attempt == 5:
-            break
-        delay = 5.0 * (attempt + 1)
-        try:
-            for d in r.json().get("error", {}).get("details", []):
-                if str(d.get("@type", "")).endswith("RetryInfo"):
-                    delay = float(str(d.get("retryDelay", "")).rstrip("s") or delay) + 1
-        except Exception:
-            pass
-        time.sleep(min(delay, 65))
-    if r.status_code == 429:
-        raise RuntimeError("سهمیه‌ی Gemini پر شده (429): " + _gemini_error(r))
-    r.raise_for_status()
-    return r
+    problems = []
+    models = gemini_models()
+    for n, model in enumerate(models):
+        r = None
+        last_resort = n == len(models) - 1
+        for attempt in range(3 if last_resort else 1):  # with other models left, move on at once
+            with _pace_lock:  # calls from parallel threads queue up here
+                wait = _last_call[0] + gap - time.monotonic()
+                if wait > 0:
+                    time.sleep(wait)
+                _last_call[0] = time.monotonic()
+            try:
+                r = httpx.post(GEMINI_URL.format(model=model),
+                               headers={"x-goog-api-key": config.GEMINI_API_KEY},  # proxy may inject the real key
+                               json=body, timeout=timeout)
+            except httpx.TransportError as e:
+                problems.append(f"{model}: {type(e).__name__}")
+                r = None
+                time.sleep(3)
+                continue
+            if r.status_code not in (429, 500, 502, 503, 504):
+                break
+            delay = 4.0 * (attempt + 1)
+            daily = "PerDay" in r.text  # daily quota: waiting will not help, move on
+            try:
+                for d in r.json().get("error", {}).get("details", []):
+                    if str(d.get("@type", "")).endswith("RetryInfo"):
+                        delay = float(str(d.get("retryDelay", "")).rstrip("s") or delay) + 1
+            except Exception:
+                pass
+            if daily or not last_resort or attempt == 2 or delay > 40:
+                break
+            time.sleep(delay)
+        if r is None:
+            continue
+        if r.status_code == 200:
+            return r
+        if r.status_code == 404:
+            _dead_models.add(model)
+        elif r.status_code in (429, 500, 502, 503, 504):
+            _cool_until[model] = time.monotonic() + COOLDOWN
+        problems.append(f"{model}: {r.status_code} {_gemini_error(r)[:120]}")
+        if r.status_code in (400, 401, 403) and "API key" in r.text:
+            break  # a key problem, not a model problem
+    raise LLMUnavailable("هیچ مدل Gemini جواب نداد — " + " | ".join(problems))
 
 
 def _gemini_error(r) -> str:
@@ -99,13 +148,20 @@ def _anthropic(system, user, search, max_tokens):
 def generate_parts(system: str, parts: list, max_tokens: int = 4000) -> str:
     """Blocking multimodal call. parts: str (text) or (bytes, mime_type) (image), in order."""
     import base64
+    if config.LLM_PROVIDER == "openai":
+        return _openai_chat(system, parts, max_tokens)
     if config.LLM_PROVIDER == "gemini":
         gparts = [{"text": p} if isinstance(p, str)
                   else {"inlineData": {"mimeType": p[1], "data": base64.b64encode(p[0]).decode()}} for p in parts]
         body = {"systemInstruction": {"parts": [{"text": system}]},
                 "contents": [{"role": "user", "parts": gparts}],
                 "generationConfig": {"maxOutputTokens": max_tokens + 8000, "temperature": 0.4}}
-        r = _gemini_post(body, timeout=240)
+        try:
+            r = _gemini_post(body, timeout=240)
+        except LLMUnavailable:
+            if not (config.OPENAI_API_KEY and config.LLM_FALLBACK):
+                raise
+            return _openai_chat(system, parts, max_tokens)
         cands = r.json().get("candidates") or []
         if not cands:
             raise RuntimeError("Gemini returned no candidates: " + str(r.json().get("promptFeedback"))[:300])
@@ -238,3 +294,37 @@ def check_image(data: bytes, where: str) -> bytes:
         preview = data[:200].decode("utf-8", "replace").replace("\n", " ")
         raise ImageUnavailable(f"پاسخ سرویس تصویر، تصویر نبود ({where}، {len(data)} بایت): {preview}")
     return data
+
+
+def _openai_chat(system: str, parts: list, max_tokens: int = 4000) -> str:
+    """OpenAI-compatible chat completion (OpenAI or a reseller via OPENAI_BASE_URL); parts: text or (bytes, mime)."""
+    import base64
+    content = [{"type": "text", "text": p} if isinstance(p, str) else
+               {"type": "image_url", "image_url": {"url": f"data:{p[1]};base64,{base64.b64encode(p[0]).decode()}"}}
+               for p in parts]
+    body = {"model": config.OPENAI_TEXT_MODEL, "max_tokens": max_tokens + 4000,
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": content}]}
+    headers = {"Authorization": f"Bearer {config.OPENAI_API_KEY}"}
+    r = None
+    for attempt in range(3):
+        try:
+            r = httpx.post(f"{config.OPENAI_BASE_URL}/chat/completions", headers=headers, json=body, timeout=240)
+        except httpx.TransportError as e:
+            if attempt == 2:
+                raise LLMUnavailable(f"سرویس پشتیبان ({config.OPENAI_BASE_URL}) در دسترس نیست: {e}")
+            time.sleep(5)
+            continue
+        if r.status_code == 400 and "max_tokens" in r.text:  # newer models want max_completion_tokens
+            body["max_completion_tokens"] = body.pop("max_tokens", max_tokens + 4000)
+            continue
+        if r.status_code not in (429, 500, 502, 503, 504):
+            break
+        time.sleep(5 * (attempt + 1))
+    if r is None or r.status_code != 200:
+        msg = r.text[:200] if r is not None else "no answer"
+        raise LLMUnavailable(f"سرویس پشتیبان ({config.OPENAI_TEXT_MODEL}) جواب نداد: {msg}")
+    msg = (r.json().get("choices") or [{}])[0].get("message", {})
+    c = msg.get("content") or ""
+    if isinstance(c, list):
+        c = "".join(x.get("text", "") for x in c if isinstance(x, dict))
+    return c

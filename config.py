@@ -19,12 +19,19 @@ ELEVENLABS_VOICE_ID = get("ELEVENLABS_VOICE_ID", "")
 ELEVENLABS_MODEL = get("ELEVENLABS_MODEL", "eleven_v3")
 LLM_PROVIDER = get("LLM_PROVIDER", "gemini")
 GEMINI_API_KEY = get("GEMINI_API_KEY", "")
-GEMINI_MODEL = get("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = get("GEMINI_MODEL", "gemini-3-flash-preview")
+# tried in this order when a model is retired, overloaded or out of quota
+GEMINI_FALLBACK_MODELS = [m.strip() for m in get(
+    "GEMINI_FALLBACK_MODELS", "gemini-3-flash-preview,gemini-3.1-flash-lite,gemini-flash-latest,gemini-flash-lite-latest"
+).split(",") if m.strip()]
 GEMINI_RPM = int(get("GEMINI_RPM", "9"))
 GEMINI_IMAGE_MODEL = get("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image")
 # optional separate key (a billed Google project) only for images, so text calls stay on the free key
 GEMINI_IMAGE_API_KEY = get("GEMINI_IMAGE_API_KEY", "") or GEMINI_API_KEY
 OPENAI_API_KEY = get("OPENAI_API_KEY", "")
+# last resort for text when every Gemini model fails (uses credit on that service): on/off
+LLM_FALLBACK = get("LLM_FALLBACK", "on").lower() == "on"
+OPENAI_TEXT_MODEL = get("OPENAI_TEXT_MODEL", "gpt-4o-mini")
 # OpenAI-compatible service address: https://api.openai.com/v1 or a reseller such as https://api.gapgpt.app/v1
 OPENAI_BASE_URL = get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
 OPENAI_IMAGE_MODEL = get("OPENAI_IMAGE_MODEL", "gpt-image-1")
