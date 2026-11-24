@@ -299,6 +299,36 @@ async def cmd_bulletin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await run_bulletin(update, ctx, brands.DEFAULT)
 
 
+def bulletin_window():
+    """(start, end) of the bulletin: 08:00 yesterday to 08:00 today, Tehran time (before 08:00: the day before);
+    or (None, None) for the last BULLETIN_HOURS hours."""
+    if config.BULLETIN_WINDOW != "8to8":
+        return None, None
+    now = datetime.now(TEHRAN)
+    end = now.replace(hour=config.BULLETIN_HOUR, minute=0, second=0, microsecond=0)
+    if now < end:
+        end -= timedelta(days=1)
+    return end - timedelta(days=1), end
+
+
+async def bulletin_home(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """The bulletin bot's only screen."""
+    b = brands.get(None)
+    start, end = bulletin_window()
+    span = (f"خبرهای ساعت {config.BULLETIN_HOUR} صبح {docx_out.persian_date(start)} تا {config.BULLETIN_HOUR} صبح "
+            f"{docx_out.persian_date(end)}" if start else f"خبرهای {config.BULLETIN_HOURS} ساعت اخیر")
+    await update.effective_message.reply_text(
+        f"🗞 ربات بولتن {b.name}\n{span}، با بخش‌های بولتن"
+        + (" و تحلیل زیر هر خبر" if config.BULLETIN_ANALYSIS else "") + "، به‌صورت فایل Word.",
+        reply_markup=Markup([[Btn("🗞 ساخت بولتن", callback_data="bul_go")]]))
+
+
+async def bulletin_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    await run_bulletin(update, ctx, brands.DEFAULT)
+
+
 async def run_bulletin(update, ctx, brand_key: str):
     chat = update.effective_chat.id
     brand = brands.get(brand_key)
@@ -313,7 +343,8 @@ async def run_bulletin(update, ctx, brand_key: str):
         await reply(f"🗞 {brand.label}: در حال جمع‌آوری خبرهای {config.BULLETIN_HOURS} ساعت اخیر و نوشتن بولتن… "
                     "(چند دقیقه)")
         try:
-            b = await bulletin.build(brand=brand)
+            start, end = bulletin_window()
+            b = await bulletin.build(brand=brand, start=start, end=end, analysis=config.BULLETIN_ANALYSIS)
         except Exception as e:
             log.exception("bulletin failed")
             await reply(f"❌ ساخت بولتن شکست خورد:\n{e}")
@@ -321,14 +352,16 @@ async def run_bulletin(update, ctx, brand_key: str):
         if not b["sections"]:
             await reply("هیچ خبری برای بخش‌های بولتن پیدا نشد.")
             return
-        when = datetime.now(TEHRAN)
+        when = end if config.BULLETIN_WINDOW == "8to8" else datetime.now(TEHRAN)
+        period = (f"اخبار از ساعت {config.BULLETIN_HOUR} صبح {docx_out.persian_date(start)} تا ساعت "
+                  f"{config.BULLETIN_HOUR} صبح {docx_out.persian_date(end)}" if config.BULLETIN_WINDOW == "8to8" else "")
         folder = config.WORK_DIR / "bulletins"
         folder.mkdir(parents=True, exist_ok=True)
         jy, jm, jd = docx_out.to_jalali(when.year, when.month, when.day)
         stem = f"bulletin_{brand.key}_{jy}-{jm:02d}-{jd:02d}_{when:%H%M}"
         name = "" if brand.key == brands.FIRST else brand.name  # the first outlet keeps the approved title
-        clean = docx_out.write(b, folder / f"{stem}.docx", when, outlet=name)
-        review = docx_out.write(b, folder / f"{stem}_links.docx", when, with_links=True, outlet=name)
+        clean = docx_out.write(b, folder / f"{stem}.docx", when, outlet=name, period=period)
+        review = docx_out.write(b, folder / f"{stem}_links.docx", when, with_links=True, outlet=name, period=period)
         counts = "\n".join(f"• {s['title']}: {len(s['entries'])}" for s in b["sections"])
         st = b["stats"]
         note = f"\n⚠️ فیدهای ناموفق: {', '.join(b['errors'])}" if b["errors"] else ""
@@ -337,7 +370,7 @@ async def run_bulletin(update, ctx, brand_key: str):
             note += (f"\n⚠️ {st['items'] - st['sorted']} خبر دسته‌بندی نشد و در بولتن نیامد"
                      + (f" ({b['class_errors'][0][:150]})" if b["class_errors"] else ""))
         await reply(
-            f"✅ بولتن {brand.label} آماده شد ({st['items']} خبر در {st['hours']} ساعت اخیر، {st['used']} خبر مرتبط در بخش‌ها):\n{counts}"
+            f"✅ بولتن {brand.label} آماده شد ({'۸ صبح تا ۸ صبح؛ ' if config.BULLETIN_WINDOW == '8to8' else ''}{st['items']} خبر در {st['hours']} ساعت اخیر، {st['used']} خبر مرتبط در بخش‌ها):\n{counts}"
             f"{note}\n\nقبل از انتشار حتماً بازبینی کنید؛ فایل دوم زیر هر خبر لینک منبع را دارد.")
         with clean.open("rb") as f:
             await ctx.bot.send_document(chat, f, filename=clean.name, caption="🗞 بولتن (برای انتشار)")
@@ -1115,6 +1148,9 @@ async def hub_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         name = brands.bot_username(b)
         if name and uid in brands.allowed_users(b):
             rows.append([Btn(b.label, url=f"https://t.me/{name}?start=hub")])
+        bul = brands.bulletin_username(b)
+        if bul and uid in brands.allowed_users(b):
+            rows.append([Btn(f"🗞 بولتن {b.name}", url=f"https://t.me/{bul}?start=hub")])
     if not rows:
         await update.effective_message.reply_text("هنوز به ربات هیچ رسانه‌ای دسترسی ندارید.")
         return
@@ -1130,6 +1166,12 @@ async def set_menu(app):
             await app.bot.set_my_name(config.BOT_NAME)
         except Exception:
             log.exception("could not set the bot name")
+    if config.BOT_MODE == "bulletin":
+        try:
+            await app.bot.set_my_commands([BotCommand("bulletin", "ساخت بولتن (Word)")])
+        except Exception:
+            log.exception("could not set the command menu")
+        return
     if config.BOT_MODE == "hub":
         try:
             await app.bot.set_my_commands([BotCommand("start", "انتخاب رسانه")])
@@ -1171,6 +1213,16 @@ def main():
         app.add_handler(MessageHandler(hub_users, hub_start))
         app.add_error_handler(on_error)
         log.info("hub bot: %s", ", ".join(f"{b.key}=@{brands.bot_username(b) or '?'}" for b in brands.BRANDS.values()))
+        app.run_polling()
+        return
+    if config.BOT_MODE == "bulletin":  # a bot that only makes the bulletin
+        bul_users = filters.User(user_id=list(config.ALLOWED_USER_IDS))
+        app.add_handler(CommandHandler("bulletin", lambda u, c: run_bulletin(u, c, brands.DEFAULT), filters=bul_users))
+        app.add_handler(CallbackQueryHandler(bulletin_button, pattern="^bul_go$"))
+        app.add_handler(MessageHandler(bul_users, bulletin_home))
+        app.add_error_handler(on_error)
+        log.info("bulletin bot for %s (window=%s, analysis=%s)", brands.get(None).name, config.BULLETIN_WINDOW,
+                 config.BULLETIN_ANALYSIS)
         app.run_polling()
         return
     if config.BOT_MODE == "brand" and config.BOT_BRAND not in brands.BRANDS:

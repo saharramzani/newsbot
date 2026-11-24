@@ -60,17 +60,24 @@ WRITE = """تو دبیر بولتن خبری صبحگاهی «{outlet_fa}» هس
 - عنوان بخش فقط تیتر بخش است؛ عبارت‌ها یا صفت‌های عنوان بخش را وارد متن خبرها نکن. افراد را با نام و سمتی که در خبر آمده بنویس (مثلاً «ترامپ»، «رئیس‌جمهور آمریکا»).
 - فقط واقعیت‌هایی که در متن خبرهای ورودی هست؛ هیچ عدد، نقل‌قول، نام یا رویدادی اضافه نکن. ادعاها را با «ادعا کرد»، «به گزارش …» نسبت بده. خبرهای انگلیسی/عربی را دقیق ترجمه کن.
 {extra}
+{analysis_rule}
 خروجی فقط یک آرایه‌ی JSON (بدون ```):
-[{{"source": "نام منبع", "text": "متن مدخل", "ids": [شماره‌ی خبرهایی که مدخل از آن‌ها نوشته شده]}}]"""
+[{{"source": "نام منبع", "text": "متن مدخل", {analysis_field}"ids": [شماره‌ی خبرهایی که مدخل از آن‌ها نوشته شده]}}]"""
+
+ANALYSIS_RULE = """- برای هر مدخل یک «تحلیل» کوتاه هم بنویس (۱ تا ۳ جمله): اهمیت این خبر و پیامد احتمالی‌اش برای ایران، نفت و انرژی،
+  اقتصاد یا منطقه. تحلیل از خبر جداست: لحن تحلیلی و محتاط («احتمالاً»، «می‌تواند»، «نشان می‌دهد»)، و هیچ واقعیت، عدد،
+  نام یا نقل‌قول تازه‌ای که در خبرهای ورودی نیست در آن نیاور. شعاری و جانب‌دارانه ننویس."""
 
 PRICE_RULE = ("- این بخش فقط قیمت‌هاست: هر مدخل باید عدد قیمت (نفت، بنزین، گاز، طلا، سکه، دلار) داشته باشد، عیناً همان که "
               "در خبرها آمده، با منبع. خبرِ بدون عدد قیمت را ننویس. اگر قیمتی در خبرها نیست، آن را از خودت ننویس.")
 
 
-async def collect(hours: int) -> tuple[list[dict], list[str]]:
+async def collect(hours: int, start: datetime | None = None, end: datetime | None = None) -> tuple[list[dict], list[str]]:
+    """Feed items published in [start, end) if given (e.g. 08:00 yesterday to 08:00 today), else in the last hours."""
     items, errors, _ = await _fetch_all()
-    now = datetime.now(timezone.utc)
-    recent = sorted((i for i in items if now - i["published"] <= timedelta(hours=hours)),
+    end = end or datetime.now(timezone.utc)
+    start = start or end - timedelta(hours=hours)
+    recent = sorted((i for i in items if start <= i["published"] < end),
                     key=lambda i: i["published"], reverse=True)
     seen, out = set(), []
     for i in recent:
@@ -108,12 +115,16 @@ async def classify(items: list[dict], sections: list[dict], brand) -> tuple[dict
     return result, errors
 
 
-async def write_section(section: dict, items: list[tuple[int, dict]], brand) -> list[dict]:
+async def write_section(section: dict, items: list[tuple[int, dict]], brand, analysis: bool = False) -> list[dict]:
     listing = "\n\n".join(f"{k}. منبع: {source_fa(i)} | زمان: {i['published']:%H:%M UTC}\nتیتر: {i['title']}\nمتن: {i['snippet']}"
                           for k, i in items)
-    system = WRITE.format(title=section["title"], style=brand.text("bulletin_style"), max_entries=MAX_ENTRIES,
+    # the writer sees what the section is about, never the printed heading: headings may carry editorial labels that
+    # must not leak into the news text itself
+    system = WRITE.format(title=section["desc"] or section["title"], style=brand.text("bulletin_style"), max_entries=MAX_ENTRIES,
                           outlet_fa=brand.name,
-                          extra=PRICE_RULE if section["key"] == "prices" else "")
+                          extra=PRICE_RULE if section["key"] == "prices" else "",
+                          analysis_rule=ANALYSIS_RULE if analysis else "",
+                          analysis_field='"analysis": "تحلیل کوتاه", ' if analysis else "")
     text, _ = await asyncio.to_thread(llm.generate, system, listing, False, 6000)
     valid = {k for k, _ in items}
     out = []
@@ -121,16 +132,21 @@ async def write_section(section: dict, items: list[tuple[int, dict]], brand) -> 
         if isinstance(e, dict) and str(e.get("text", "")).strip():
             ids = [x for x in e.get("ids", []) if isinstance(x, int) and x in valid]
             source = re.split(r"\s*[/،,]\s*", str(e.get("source", "")).strip())[0]  # one source per entry
-            out.append({"source": source, "text": str(e["text"]).strip(), "ids": ids})
+            text = str(e["text"]).strip()
+            while source and re.match(rf"^{re.escape(source)}\s*/\s*", text):  # «بی‌بی‌سی/ بی‌بی‌سی/ …»
+                text = re.sub(rf"^{re.escape(source)}\s*/\s*", "", text, count=1)
+            out.append({"source": source, "text": text, "ids": ids,
+                        "analysis": str(e.get("analysis", "")).strip() if analysis else ""})
     return out[:MAX_ENTRIES]
 
 
-async def build(hours: int | None = None, brand=None) -> dict:
+async def build(hours: int | None = None, brand=None, start: datetime | None = None, end: datetime | None = None,
+                analysis: bool = False) -> dict:
     """Returns {'sections': [{'title', 'entries': [{'source','text','links'}]}], 'stats': {...}, 'errors': [...]}."""
     hours = hours or config.BULLETIN_HOURS
     brand = brands.get(getattr(brand, "key", brand))
     sections = load_sections(brand)
-    items, errors = await collect(hours)
+    items, errors = await collect(hours, start, end)
     if not items:
         raise RuntimeError("هیچ خبری از فیدها دریافت نشد. فیدهای ناموفق: " + ", ".join(errors or ["—"]))
     where, class_errors = await classify(items, sections, brand)
@@ -144,10 +160,10 @@ async def build(hours: int | None = None, brand=None) -> dict:
             return sec, [], None
         async with sem:
             try:
-                return sec, await write_section(sec, mine, brand), None
+                return sec, await write_section(sec, mine, brand, analysis), None
             except Exception:
                 try:  # one retry (usually a rate-limit hiccup)
-                    return sec, await write_section(sec, mine, brand), None
+                    return sec, await write_section(sec, mine, brand, analysis), None
                 except Exception as e:
                     return sec, [], str(e)[:200]
     out_sections, failed = [], []

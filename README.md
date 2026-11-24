@@ -61,3 +61,9 @@ python3 /opt/newsbot/deploy/bots.py status
 ```
 - دسترسی جدا برای هر رسانه (اختیاری، در `/opt/newsbot/.env`): `ALLOWED_USER_IDS_AGHAYE_EGHTESAD=...` — ربات مادر به هر کاربر فقط رسانه‌های مجازش را نشان می‌دهد.
 - به‌روزرسانی همه‌ی ربات‌ها: `cd ~/newsbot && git pull && bash deploy/install.sh && systemctl restart newsbot 'newsbot@*'`
+
+## ربات بولتن
+ربات جدایی که فقط بولتن می‌سازد: خبرهای ساعت ۸ صبح دیروز تا ۸ صبح امروز (وقت تهران)، با بخش‌های بولتن همان رسانه
+و یک «تحلیل» زیر هر خبر (آبی و جدا از متن خبر؛ بدون واقعیت تازه). راه‌اندازی روی سرور:
+`python3 /opt/newsbot/deploy/bots.py add bulletin bulletin avayenaft` — در منوی News Room هم خودکار اضافه می‌شود.
+تنظیمات اختیاری (در `bots/bulletin.env`): `BULLETIN_HOUR=8`، `BULLETIN_ANALYSIS=on|off`، `BULLETIN_WINDOW=8to8|hours`.

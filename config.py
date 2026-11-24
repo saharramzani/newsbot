@@ -70,7 +70,13 @@ def ids(text: str) -> set[int]:
 #   hub   = the "mother" bot: a menu that opens each outlet's own bot
 BOT_MODE = get("BOT_MODE", "multi").lower()
 BOT_BRAND = get("BOT_BRAND", "")
-BOT_NAME = get("BOT_NAME", "")  # optional: the bot's display name in Telegram is set to this at startup
+BOT_NAME = get("BOT_NAME", "")
+#   bulletin = a bot that only makes the bulletin (BOT_BRAND = whose sections/style)
+# bulletin window: "8to8" = from BULLETIN_HOUR yesterday to BULLETIN_HOUR today (Tehran time), "hours" = last
+# BULLETIN_HOURS hours; analysis under each item: on/off. The bulletin bot defaults to 8to8 + analysis.
+BULLETIN_WINDOW = get("BULLETIN_WINDOW", "8to8" if BOT_MODE == "bulletin" else "hours").lower()
+BULLETIN_HOUR = int(get("BULLETIN_HOUR", "8"))
+BULLETIN_ANALYSIS = get("BULLETIN_ANALYSIS", "on" if BOT_MODE == "bulletin" else "off").lower() == "on"  # optional: the bot's display name in Telegram is set to this at startup
 # Netscape-format cookies of a logged-in browser, for yt-dlp (Instagram, and YouTube on servers)
 YTDLP_COOKIES = get("YTDLP_COOKIES", "cookies.txt")
 WORK_DIR = Path(get("WORK_DIR", "work"))

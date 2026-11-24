@@ -64,7 +64,8 @@ def _run(paragraph, text, size=12, bold=False, color=None):
     return r
 
 
-def write(bulletin: dict, out: Path, when: datetime, with_links: bool = False, outlet: str = "") -> Path:
+def write(bulletin: dict, out: Path, when: datetime, with_links: bool = False, outlet: str = "",
+          period: str = "") -> Path:
     doc = Document()
     sec = doc.sections[0]
     sec._sectPr.append(OxmlElement("w:bidi"))
@@ -73,6 +74,10 @@ def write(bulletin: dict, out: Path, when: datetime, with_links: bool = False, o
     part = "صبح" if when.hour < 12 else "بعدازظهر" if when.hour < 18 else "شب"
     hour = when.hour if when.hour <= 12 else when.hour - 12
     _run(title, f"بولتن {outlet + ' ' if outlet else ''}ساعت {hour} {part} {persian_date(when)}", 14, bold=True)
+    if period:  # e.g. «اخبار از ساعت ۸ صبح ... تا ساعت ۸ صبح ...»
+        pp = doc.add_paragraph()
+        _rtl(pp, WD_ALIGN_PARAGRAPH.RIGHT)
+        _run(pp, period, 10, color=(90, 90, 90))
     if with_links:
         p = doc.add_paragraph()
         _rtl(p, WD_ALIGN_PARAGRAPH.RIGHT)
@@ -87,6 +92,12 @@ def write(bulletin: dict, out: Path, when: datetime, with_links: bool = False, o
             p = doc.add_paragraph()
             _rtl(p)
             _run(p, (f"{e['source']}/ " if e["source"] else "") + e["text"], 12)
+            if e.get("analysis"):  # the AI's analysis, visibly separate from the news itself
+                ap = doc.add_paragraph()
+                _rtl(ap)
+                ap.paragraph_format.left_indent = Pt(12)
+                _run(ap, "تحلیل: ", 11, bold=True, color=(20, 70, 140))
+                _run(ap, e["analysis"], 11, color=(20, 70, 140))
             if with_links and e.get("links"):
                 lp = doc.add_paragraph()
                 _rtl(lp, WD_ALIGN_PARAGRAPH.LEFT)

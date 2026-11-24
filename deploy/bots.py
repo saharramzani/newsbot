@@ -3,6 +3,8 @@
   python3 deploy/bots.py main avayenaft          the existing bot (service "newsbot") becomes the Avaye Naft bot
   python3 deploy/bots.py add aghaye aghaye_eghtesad   a new bot for one outlet (asks for its token)
   python3 deploy/bots.py add newsroom hub        the mother bot (asks for its token, finds the outlet bots itself)
+  python3 deploy/bots.py add bulletin bulletin avayenaft   a bot that only makes Avaye Naft's bulletin
+                                                 (08:00 yesterday to 08:00 today, with analysis; shown in the hub)
   python3 deploy/bots.py hub                     refresh the mother bot's menu after adding an outlet bot
   python3 deploy/bots.py status                  list the bots
 
@@ -74,9 +76,20 @@ def outlet_bots() -> dict:
     return found
 
 
+def bulletin_bots() -> dict:
+    """outlet key -> token, for every bulletin-only bot."""
+    found = {}
+    for f in sorted(BOTS.glob("*.env")):
+        e = read_env(f)
+        if e.get("BOT_MODE") == "bulletin" and e.get("BOT_BRAND"):
+            found[e["BOT_BRAND"]] = e["TELEGRAM_BOT_TOKEN"]
+    return found
+
+
 def refresh_hub():
     hubs = [f for f in BOTS.glob("*.env") if read_env(f).get("BOT_MODE") == "hub"]
     links = {f"BOT_USERNAME_{k.upper()}": username(t) for k, t in outlet_bots().items()}
+    links.update({f"BULLETIN_USERNAME_{k.upper()}": username(t) for k, t in bulletin_bots().items()})
     for f in hubs:
         set_env(f, links)
         subprocess.run(["systemctl", "restart", f"newsbot@{f.stem}"])
@@ -104,15 +117,21 @@ def main():
         systemctl("restart", "newsbot")
         print(f"The main bot (@{username(read_env(MAIN_ENV)['TELEGRAM_BOT_TOKEN'])}) now works only for {a[1]}.")
         refresh_hub()
-    elif a[0] == "add" and len(a) == 3:
+    elif a[0] == "add" and len(a) in (3, 4):
         name, what = a[1], a[2]
-        if what != "hub" and what not in brands():
-            sys.exit(f"Unknown outlet {what!r}. Outlets: {', '.join(brands())} (or 'hub')")
+        outlet = a[3] if len(a) == 4 else None
+        if what == "bulletin":
+            if outlet not in brands():
+                sys.exit(f"Which outlet's bulletin? python3 deploy/bots.py add {name} bulletin <{'|'.join(brands())}>")
+        elif what != "hub" and what not in brands():
+            sys.exit(f"Unknown outlet {what!r}. Outlets: {', '.join(brands())} (or 'hub' / 'bulletin <outlet>')")
         token = getpass.getpass(f"Paste the token of the new bot '{name}' (hidden) and press Enter: ").strip()
         user = username(token)
         values = {"TELEGRAM_BOT_TOKEN": token, "WORK_DIR": f"work/{name}",
-                  "BOT_MODE": "hub" if what == "hub" else "brand"}
-        if what != "hub":
+                  "BOT_MODE": what if what in ("hub", "bulletin") else "brand"}
+        if what == "bulletin":
+            values["BOT_BRAND"] = outlet
+        elif what != "hub":
             values["BOT_BRAND"] = what
         set_env(BOTS / f"{name}.env", values)
         systemctl("daemon-reload")

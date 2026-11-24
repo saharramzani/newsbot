@@ -72,7 +72,7 @@ def load_all() -> dict[str, Brand]:
 BRANDS = load_all()
 FIRST = next(iter(BRANDS))  # the first outlet (keeps e.g. the approved bulletin title without a name)
 # a single-outlet bot (BOT_MODE=brand) uses only its own outlet
-DEFAULT = config.BOT_BRAND if config.BOT_MODE == "brand" and config.BOT_BRAND in BRANDS else FIRST
+DEFAULT = config.BOT_BRAND if config.BOT_MODE in ("brand", "bulletin") and config.BOT_BRAND in BRANDS else FIRST
 
 
 def get(key: str | None) -> Brand:
@@ -81,7 +81,7 @@ def get(key: str | None) -> Brand:
 
 def available() -> list[Brand]:
     """Outlets this bot works for: just its own in a single-outlet bot, all of them otherwise."""
-    if config.BOT_MODE == "brand" and config.BOT_BRAND in BRANDS:
+    if config.BOT_MODE in ("brand", "bulletin") and config.BOT_BRAND in BRANDS:
         return [BRANDS[config.BOT_BRAND]]
     return list(BRANDS.values())
 
@@ -90,6 +90,11 @@ def allowed_users(b: Brand) -> set[int]:
     """Who may use an outlet's bot (for the hub menu): ALLOWED_USER_IDS_<KEY> if set, else ALLOWED_USER_IDS."""
     own = config.get(f"ALLOWED_USER_IDS_{b.key.upper()}", "")
     return config.ids(own) if own.strip() else set(config.ALLOWED_USER_IDS)
+
+
+def bulletin_username(b: Brand) -> str:
+    """The outlet's bulletin bot, if it has one (for the hub menu): BULLETIN_USERNAME_<KEY> in .env."""
+    return config.get(f"BULLETIN_USERNAME_{b.key.upper()}", "").lstrip("@").strip()
 
 
 def bot_username(b: Brand) -> str:
