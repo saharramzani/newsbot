@@ -16,6 +16,7 @@ import httpx
 import brands
 import config
 from services import llm
+from services.sources_fa import source_fa
 
 PER_SOURCE, MAX_ITEMS = 40, 400  # safety caps only: newest items per source, total
 BATCH = 50  # headlines translated per LLM call
@@ -218,6 +219,30 @@ async def merge_duplicates(items: list[dict]) -> list[dict]:
     return merged
 
 
+def feeds_summary(recent: list[dict], stories: list[dict], errors: list[str]) -> str:
+    """Which outlets the search read: items in the window per outlet (feeds of one outlet added up), how many of
+    them are in important stories, and outlets that had nothing in the window."""
+    names = {}
+    for name, _ in load_feeds():
+        if name not in errors:
+            names.setdefault(source_fa({"source": name}), 0)
+    for i in recent:
+        o = source_fa(i)
+        names[o] = names.get(o, 0) + 1
+    important = {}
+    for st in stories:
+        if st.get("relevant"):
+            for o in {source_fa(x) for x in st.get("sources", [st])}:
+                important[o] = important.get(o, 0) + 1
+    active = sorted(((o, n) for o, n in names.items() if n), key=lambda x: -x[1])
+    empty = [o for o, n in names.items() if not n]
+    line = "📡 منابعی که خوانده شد (تعداد خبر در این بازه، و چندتایش در خبرهای مهم): " + "، ".join(
+        f"{o} {n}" + (f" ({important[o]} مهم)" if important.get(o) else "") for o, n in active)
+    if empty:
+        line += "\n📭 بدون خبر در این بازه: " + "، ".join(empty)
+    return line
+
+
 async def find_news(hours: int | None = None, brand=None) -> tuple[list[dict], list[dict]]:
     """ALL items from the feeds in the time window (newest first), headlines translated to Persian.
 
@@ -289,9 +314,11 @@ async def find_news(hours: int | None = None, brand=None) -> tuple[list[dict], l
     n_imp = sum(1 for i in out if i["relevant"])
     notes = [{"title": f"بازه‌ی جست‌وجو: {window} ساعت اخیر؛ از {len(out)} خبر ({n_feeds - len(errors)} فید)، "
                        f"{n_imp} خبر مهم انتخاب شد (نمره‌ی اهمیت {config.NEWS_MIN_IMPORTANCE} از ۵ یا بیشتر)", "uri": ""}]
+    notes.append({"title": feeds_summary(recent, out, errors), "uri": ""})
     if len(translated) < len(recent):
         notes.append({"title": f"⚠️ {len(recent) - len(translated)} خبر به خاطر خطای هوش مصنوعی ترجمه و نمره‌دهی نشد "
                                f"(در «نمایش همه» به زبان اصلی آمده‌اند): {(batch_errors or ['؟'])[0][:150]}", "uri": ""})
     if errors:
-        notes.append({"title": "فیدهای ناموفق: " + ", ".join(errors), "uri": ""})
+        failed = list(dict.fromkeys(source_fa({"source": e}) for e in errors))  # one name per outlet, in order
+        notes.append({"title": f"⚠️ منابعی که باز نشدند ({len(errors)} فید): " + "، ".join(failed), "uri": ""})
     return out, notes
