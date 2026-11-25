@@ -115,7 +115,14 @@ def _brush(bw: int, bh: int, rgb: tuple, seed: int, out: Path) -> tuple[int, int
     return img.size
 
 
-def compose(bg: Path, title, out: Path, fmt: str = "9x16", icon_path: Path | None = None) -> Path:
+def _hex_ass(h: str) -> str:
+    h = h.lstrip("#")
+    return f"&H00{h[4:6]}{h[2:4]}{h[0:2]}".upper()
+
+
+def compose(bg: Path, title, out: Path, fmt: str = "9x16", icon_path: Path | None = None,
+            palette: dict | None = None) -> Path:
+    """palette (an outlet's colours): look -> [text #hex, banner #hex or None]; looks: plain, white, yellow, red."""
     """title: a string (auto-split) or a list of 1-3 lines."""
     f = FORMATS[fmt]
     w, h = f["w"], f["h"]
@@ -138,6 +145,12 @@ def compose(bg: Path, title, out: Path, fmt: str = "9x16", icon_path: Path | Non
     styles, events, brushes = [], [], []
     for i, (line, size, look) in enumerate(zip(lines, sizes, pattern)):
         text_c, box_c = LOOKS[look]
+        box_rgb = _RGB.get(box_c)
+        if palette and look in palette:
+            t_hex, b_hex = palette[look]
+            text_c = _hex_ass(t_hex)
+            box_c = _hex_ass(b_hex) if b_hex else None
+            box_rgb = tuple(int(b_hex.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4)) if b_hex else None
         cy = y + heights[i] / 2
         y += heights[i]
         if box_c:  # brush-stroke banner behind the text (drawn as an image), text without outline on top
@@ -146,7 +159,7 @@ def compose(bg: Path, title, out: Path, fmt: str = "9x16", icon_path: Path | Non
             bw = int(min(w * 0.97, text_px + size * 0.55))
             bh = int(size * 0.92)
             png = out.with_name(f"{out.stem}_brush{i}.png")
-            pw, ph = _brush(bw, bh, _RGB[box_c], sum(map(ord, line)) + i, png)
+            pw, ph = _brush(bw, bh, box_rgb, sum(map(ord, line)) + i, png)
             brushes.append((png, int(w / 2 - pw / 2), int(cy - ph / 2)))
             styles.append(f"Style: L{i},{FONT_NAME},{size},{text_c},{text_c},{_BLACK},&H00000000,0,0,0,0,100,100,0,0,1,0,0,5,0,0,0,-1")
         else:  # white text with a heavy black outline and hard shadow
@@ -180,7 +193,16 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
     fc += f";[b{len(brushes)}]{ass_filter}[tx]"
     logo_in = len(brushes) + 2
     icon_file = Path(icon_path or LOGO_ICON)
-    if icon_file.exists():  # small round brand icon at the bottom centre
+    wide = False
+    if icon_file.exists():
+        from PIL import Image
+        with Image.open(icon_file) as im:
+            wide = im.width > im.height * 1.4  # a wordmark logo, not a round icon
+    if icon_file.exists() and wide:  # wide logo at the bottom centre, aspect kept, its own transparency
+        cmd += ["-i", str(icon_file)]
+        fc += (f";[{logo_in}:v]scale={int(w * 0.42)}:-1,format=rgba[lg];"
+               f"[tx][lg]overlay=(W-w)/2:H-h-{int(h * 0.03)}[v]")
+    elif icon_file.exists():  # small round brand icon at the bottom centre
         cmd += ["-i", str(icon_file)]
         fc += (f";[{logo_in}:v]scale={icon}:{icon},format=rgba,"
                f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if(lte(hypot(X-W/2,Y-H/2),W/2-1),255,0)'[lg];"

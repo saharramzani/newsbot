@@ -742,8 +742,9 @@ async def send_cover(update, ctx, key):
     c = j["covers"][key]
     out = COVER_DIR / f"{chat}_{key}.jpg"
     try:
-        await asyncio.to_thread(cover.compose, Path(c["bg"]), c["title"], out, c["fmt"],
-                                brands.get(c.get("brand")).path("cover_icon"))
+        b = brands.get(c.get("brand"))
+        await asyncio.to_thread(cover.compose, Path(c["bg"]), c["title"], out, c["fmt"], b.path("cover_icon"),
+                                b.cover.get("palette"))
     except Exception as e:
         log.exception("cover compose failed")
         await ctx.bot.send_message(chat, f"⚠️ ساخت کاور شکست خورد (ویدئو سالم است):\n{e}")

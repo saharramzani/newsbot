@@ -39,6 +39,7 @@ class Brand:
     subtitle: dict = field(default_factory=dict)  # subtitle look, see services/video.build_ass
     voice: dict = field(default_factory=dict)     # elevenlabs: {...voice_settings}, edge_voice, edge_rate
     tone: str = ""                 # narrator's tone for this outlet (overrides the tone of the style sample)
+    cover: dict = field(default_factory=dict)     # cover: {"palette": {look: [text #hex, banner #hex | null]}}
     files: dict = field(default_factory=dict)
 
     def path(self, name: str) -> Path:

@@ -40,9 +40,12 @@ def build_ass(words: list[dict], path: Path, group: int = 3, fmt: str = "9x16", 
     hl = ass_color(st["highlight"]) + "&" if st.get("highlight") else (highlight or YELLOW)
     base = ass_color(st.get("color", "#FFFFFF"))
     group = int(st.get("words") or group)
-    bottom = int(st.get("bottom") or f["sub_bottom"])
-    if fmt == "4x5" and st.get("bottom"):  # 4:5 frame is shorter: keep the same proportion
-        bottom = int(bottom * 1350 / 1920)
+    bottom = st.get("bottom") or f["sub_bottom"]
+    if isinstance(bottom, dict):  # exact position per format (e.g. inside a box of the template)
+        bottom = bottom.get(fmt) or f["sub_bottom"]
+    elif fmt == "4x5" and st.get("bottom"):  # one number: keep the same proportion on the shorter 4:5 frame
+        bottom = bottom * 1350 / 1920
+    bottom = int(bottom)
     bold = -1 if st.get("bold", True) else 0
     if st.get("box"):  # opaque/translucent box: BorderStyle 3 paints it in the outline colour
         border, outline_c = 3, ass_color(st.get("box_color", "#000000"), int(st.get("box_alpha", 60)))

@@ -4,7 +4,7 @@
   "hashtag": "#آقای_اقتصاد",
   "outlet_en": "Aghaye Eghtesad (Mr. Economy), a Persian-language outlet about Iran's economy, markets and money",
   "voice_id": "",
-  "highlight": "#4ADE80",
+  "highlight": "#FF4D7A",
   "order": 2,
   "files": {
     "topics": "brands/aghaye_eghtesad/topics.md",
@@ -14,16 +14,20 @@
     "bulletin_sections": "brands/aghaye_eghtesad/bulletin_sections.txt",
     "template_9x16": "brands/aghaye_eghtesad/template_9x16.png",
     "template_4x5": "brands/aghaye_eghtesad/template_4x5.png",
-    "cover_icon": "brands/aghaye_eghtesad/icon.png"
+    "cover_icon": "brands/aghaye_eghtesad/logo.png"
   },
   "subtitle": {
     "font": "Vazirmatn Black",
     "color": "#FFFFFF",
-    "highlight": "#4ADE80",
-    "box": true,
-    "box_color": "#064E3B",
-    "box_alpha": 50,
-    "bottom": 470
+    "highlight": "#FF4D7A",
+    "outline_color": "#002659",
+    "outline": 4,
+    "shadow": 0,
+    "bottom": {
+      "9x16": 296,
+      "4x5": 274
+    },
+    "words": 2
   },
   "voice": {
     "elevenlabs": {
@@ -32,5 +36,25 @@
     "edge_voice": "fa-IR-FaridNeural",
     "edge_rate": "+8%"
   },
-  "tone": "صمیمی و ساده‌کننده، مثل یک مشاور اقتصادی خودمانی؛ اصطلاحات اقتصادی را با مثال روزمره توضیح می‌دهد و می‌گوید خبر برای جیب مردم چه معنایی دارد"
+  "tone": "صمیمی و ساده‌کننده، مثل یک مشاور اقتصادی خودمانی؛ اصطلاحات اقتصادی را با مثال روزمره توضیح می‌دهد و می‌گوید خبر برای جیب مردم چه معنایی دارد",
+  "cover": {
+    "palette": {
+      "plain": [
+        "#FFFFFF",
+        null
+      ],
+      "white": [
+        "#002659",
+        "#FFFFFF"
+      ],
+      "yellow": [
+        "#FFFFFF",
+        "#002659"
+      ],
+      "red": [
+        "#FFFFFF",
+        "#D81E4E"
+      ]
+    }
+  }
 }
