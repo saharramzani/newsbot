@@ -39,7 +39,8 @@ class Brand:
     subtitle: dict = field(default_factory=dict)  # subtitle look, see services/video.build_ass
     voice: dict = field(default_factory=dict)     # elevenlabs: {...voice_settings}, edge_voice, edge_rate
     tone: str = ""                 # narrator's tone for this outlet (overrides the tone of the style sample)
-    cover: dict = field(default_factory=dict)     # cover: {"palette": {look: [text #hex, banner #hex | null]}}
+    cover: dict = field(default_factory=dict)     # cover: {"palette": {...}, "font": family, "font_file": path}
+    bulletin_font: str = ""        # font of the Word bulletin (empty = BULLETIN_FONT)
     files: dict = field(default_factory=dict)
 
     def path(self, name: str) -> Path:
@@ -94,6 +95,12 @@ def allowed_users(b: Brand) -> set[int]:
     """Who may use an outlet's bot (for the hub menu): ALLOWED_USER_IDS_<KEY> if set, else ALLOWED_USER_IDS."""
     own = config.get(f"ALLOWED_USER_IDS_{b.key.upper()}", "")
     return config.ids(own) if own.strip() else set(config.ALLOWED_USER_IDS)
+
+
+def font_ok(b: Brand, where: str) -> bool:
+    """A brand font is used only if its file is really there (licensed fonts are copied to the server by hand)."""
+    f = (b.subtitle if where == "subtitle" else b.cover).get("font_file")
+    return not f or (ROOT / f).is_file()
 
 
 def voice_id(b: Brand) -> str:

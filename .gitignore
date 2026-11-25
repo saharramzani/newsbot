@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 cookies.txt
 bots/
+# licensed fonts: copy to the server by hand, never into the public repository
+assets/fonts/BYekan.ttf

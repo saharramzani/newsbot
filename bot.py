@@ -365,8 +365,9 @@ async def run_bulletin(update, ctx, brand_key: str):
                 else f"bulletin_{brand.key}_{jy}-{jm:02d}-{jd:02d}_{when:%H%M}")
         # the first outlet keeps the approved title; the bulletin bot never names the outlet
         name = "" if brand.key == brands.FIRST or config.BOT_MODE == "bulletin" else brand.name
-        clean = docx_out.write(b, folder / f"{stem}.docx", when, outlet=name, period=period)
-        review = docx_out.write(b, folder / f"{stem}_links.docx", when, with_links=True, outlet=name, period=period)
+        clean = docx_out.write(b, folder / f"{stem}.docx", when, outlet=name, period=period, font=brand.bulletin_font)
+        review = docx_out.write(b, folder / f"{stem}_links.docx", when, with_links=True, outlet=name, period=period,
+                                font=brand.bulletin_font)
         counts = "\n".join(f"• {s['title']}: {len(s['entries'])}" for s in b["sections"])
         st = b["stats"]
         note = f"\n⚠️ فیدهای ناموفق: {', '.join(b['errors'])}" if b["errors"] else ""
@@ -462,7 +463,9 @@ def _prepare(j):
     spoken = _step("زمان‌بندی زیرنویس با Whisper", stt.transcribe_words, audio)
     words = stt.align_to_script(j["narration"], spoken)
     ass = video.build_ass(words, work / "subs.ass", group=config.SUBTITLE_WORDS, fmt=prep["fmt"],
-                          highlight=brand.ass_highlight(), style=brand.subtitle)
+                          highlight=brand.ass_highlight(),
+                          style=brand.subtitle if brands.font_ok(brand, "subtitle")
+                          else {k: v for k, v in brand.subtitle.items() if k not in ("font", "bold")})
     total = video.duration(audio) + 0.5
     prep.update(audio=str(audio), ass=str(ass), total=total,
                 sentences=editor.sentences(j["narration"], words, total))
@@ -743,8 +746,10 @@ async def send_cover(update, ctx, key):
     out = COVER_DIR / f"{chat}_{key}.jpg"
     try:
         b = brands.get(c.get("brand"))
+        font = (b.cover.get("font"), brands.ROOT / b.cover["font_file"]) \
+            if b.cover.get("font_file") and brands.font_ok(b, "cover") else (None, None)
         await asyncio.to_thread(cover.compose, Path(c["bg"]), c["title"], out, c["fmt"], b.path("cover_icon"),
-                                b.cover.get("palette"))
+                                b.cover.get("palette"), *font, bool(b.cover.get("bold")))
     except Exception as e:
         log.exception("cover compose failed")
         await ctx.bot.send_message(chat, f"⚠️ ساخت کاور شکست خورد (ویدئو سالم است):\n{e}")
@@ -1240,6 +1245,10 @@ def main():
     if config.BOT_MODE == "brand" and config.BOT_BRAND not in brands.BRANDS:
         raise SystemExit(f"BOT_BRAND={config.BOT_BRAND!r} is not a folder in brands/ ({', '.join(brands.BRANDS)})")
     log.info("bot for: %s", ", ".join(b.name for b in brands.available()))
+    for b in brands.available():
+        if not (brands.font_ok(b, "subtitle") and brands.font_ok(b, "cover")):
+            log.warning("%s: font file %s is missing; the default font is used instead (copy it to the server)",
+                        b.name, b.subtitle.get("font_file") or b.cover.get("font_file"))
     allowed = filters.User(user_id=list(config.ALLOWED_USER_IDS))
     app.add_handler(CommandHandler("start", cmd_start, filters=allowed))
     app.add_handler(CommandHandler("news", cmd_news, filters=allowed))

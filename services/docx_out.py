@@ -10,6 +10,7 @@ from docx.shared import Pt, RGBColor
 
 import config
 
+_FONT = config.BULLETIN_FONT  # set per document by write()
 MONTHS = ["فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور", "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"]
 WEEKDAYS = ["دوشنبه", "سه شنبه", "چهارشنبه", "پنجشنبه", "جمعه", "شنبه", "یکشنبه"]  # datetime.weekday() order
 
@@ -46,7 +47,7 @@ def _run(paragraph, text, size=12, bold=False, color=None):
     r = paragraph.add_run(text)
     r.bold = bold
     r.font.size = Pt(size)
-    r.font.name = config.BULLETIN_FONT
+    r.font.name = _FONT
     if color:
         r.font.color.rgb = RGBColor(*color)
     rpr = r._r.get_or_add_rPr()
@@ -55,7 +56,7 @@ def _run(paragraph, text, size=12, bold=False, color=None):
         fonts = OxmlElement("w:rFonts")
         rpr.insert(0, fonts)
     for attr in ("w:ascii", "w:hAnsi", "w:cs"):
-        fonts.set(qn(attr), config.BULLETIN_FONT)
+        fonts.set(qn(attr), _FONT)
     for tag in ("w:rtl", "w:szCs") + (("w:bCs",) if bold else ()):
         el = OxmlElement(tag)
         if tag == "w:szCs":
@@ -65,7 +66,9 @@ def _run(paragraph, text, size=12, bold=False, color=None):
 
 
 def write(bulletin: dict, out: Path, when: datetime, with_links: bool = False, outlet: str = "",
-          period: str = "") -> Path:
+          period: str = "", font: str = "") -> Path:
+    global _FONT
+    _FONT = font or config.BULLETIN_FONT
     doc = Document()
     sec = doc.sections[0]
     sec._sectPr.append(OxmlElement("w:bidi"))

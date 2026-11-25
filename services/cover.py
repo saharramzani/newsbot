@@ -60,23 +60,40 @@ def split_lines(title: str) -> list[str]:
     return lines
 
 
-def _measure(text: str) -> tuple[float, float]:
+def _win_height(path) -> float | None:
+    """Line height libass uses for a font size: OS/2 usWinAscent + usWinDescent, per 100 em units.
+
+    Pillow's getmetrics() reports the hhea values, which for some fonts (B Yekan: 100 vs 152) differ a lot; sizing
+    with them made banners far wider than the text.
+    """
+    import struct
+    try:
+        d = Path(path).read_bytes()
+        n = struct.unpack(">H", d[4:6])[0]
+        t = {d[12 + i * 16:16 + i * 16]: struct.unpack(">II", d[20 + i * 16:28 + i * 16])[0] for i in range(n)}
+        upem = struct.unpack(">H", d[t[b"head"] + 18:t[b"head"] + 20])[0]
+        wa, wd = struct.unpack(">HH", d[t[b"OS/2"] + 74:t[b"OS/2"] + 78])
+        return 100 * (wa + wd) / upem if wa + wd else None
+    except Exception:
+        return None
+
+
+def _measure(text: str, font_file: Path | None = None) -> tuple[float, float]:
     """(width of text at em size 100, font line height at em size 100) in pixels."""
     try:
         from PIL import ImageFont, features
         raqm = features.check("raqm")
-        font = ImageFont.truetype(str(FONT_FILE), 100,
+        font = ImageFont.truetype(str(font_file or FONT_FILE), 100,
                                   layout_engine=ImageFont.Layout.RAQM if raqm else ImageFont.Layout.BASIC)
         width = font.getlength(text, direction="rtl") if raqm else font.getlength(text) * 0.85
-        asc, desc = font.getmetrics()
-        return width, asc + desc
+        return width, _win_height(font_file or FONT_FILE) or sum(font.getmetrics())
     except Exception:
         return len(text) * 50, 160
 
 
-def _fit_size(text: str, max_w: float, max_size: int) -> int:
+def _fit_size(text: str, max_w: float, max_size: int, font_file: Path | None = None) -> int:
     """ASS font size so the line fills max_w. libass sizes fonts by line height (ascent+descent), not by em."""
-    width, line_h = _measure(text)
+    width, line_h = _measure(text, font_file)
     em = 100 * max_w / max(width, 1)
     return int(max(70, min(max_size, em * line_h / 100)))
 
@@ -121,7 +138,8 @@ def _hex_ass(h: str) -> str:
 
 
 def compose(bg: Path, title, out: Path, fmt: str = "9x16", icon_path: Path | None = None,
-            palette: dict | None = None) -> Path:
+            palette: dict | None = None, font_name: str | None = None, font_file: Path | None = None,
+            bold: bool = False) -> Path:
     """palette (an outlet's colours): look -> [text #hex, banner #hex or None]; looks: plain, white, yellow, red."""
     """title: a string (auto-split) or a list of 1-3 lines."""
     f = FORMATS[fmt]
@@ -131,7 +149,9 @@ def compose(bg: Path, title, out: Path, fmt: str = "9x16", icon_path: Path | Non
     pattern = PATTERNS[len(lines)][sum(map(ord, "".join(lines))) % len(PATTERNS[len(lines)])]
 
     max_size = 330 if fmt == "9x16" else 270
-    sizes = [_fit_size(l, w * 0.84, max_size) for l in lines]
+    sizes = [_fit_size(l, w * 0.84, max_size, font_file) for l in lines]
+    fname = font_name or FONT_NAME
+    bflag = -1 if bold else 0  # synthetic bold, for fonts that only have a regular weight
     # the block must stay between ~38% of the height and just above the logo; shrink it if it does not fit
     icon = 120 if fmt == "9x16" else 100
     bottom = h - int(h * 0.035) - icon - 40
@@ -154,16 +174,16 @@ def compose(bg: Path, title, out: Path, fmt: str = "9x16", icon_path: Path | Non
         cy = y + heights[i] / 2
         y += heights[i]
         if box_c:  # brush-stroke banner behind the text (drawn as an image), text without outline on top
-            width100, line_h100 = _measure(line)
+            width100, line_h100 = _measure(line, font_file)
             text_px = width100 * (size * 100 / line_h100) / 100
             bw = int(min(w * 0.97, text_px + size * 0.55))
             bh = int(size * 0.92)
             png = out.with_name(f"{out.stem}_brush{i}.png")
             pw, ph = _brush(bw, bh, box_rgb, sum(map(ord, line)) + i, png)
             brushes.append((png, int(w / 2 - pw / 2), int(cy - ph / 2)))
-            styles.append(f"Style: L{i},{FONT_NAME},{size},{text_c},{text_c},{_BLACK},&H00000000,0,0,0,0,100,100,0,0,1,0,0,5,0,0,0,-1")
+            styles.append(f"Style: L{i},{fname},{size},{text_c},{text_c},{_BLACK},&H00000000,{bflag},0,0,0,100,100,0,0,1,0,0,5,0,0,0,-1")
         else:  # white text with a heavy black outline and hard shadow
-            styles.append(f"Style: L{i},{FONT_NAME},{size},{text_c},{text_c},{_BLACK},&H96000000,0,0,0,0,100,100,0,0,1,{int(size * 0.06)},{int(size * 0.04)},5,0,0,0,-1")
+            styles.append(f"Style: L{i},{fname},{size},{text_c},{text_c},{_BLACK},&H96000000,{bflag},0,0,0,100,100,0,0,1,{int(size * 0.06)},{int(size * 0.04)},5,0,0,0,-1")
         events.append(f"Dialogue: 0,0:00:00.00,0:00:10.00,L{i},,0,0,0,,{{\\pos({w / 2:.0f},{cy:.0f})\\frz2.5}}\u200f{line}")  # Encoding -1 + RLM: right-to-left (see video.build_ass)
 
     ass = out.with_suffix(".ass")

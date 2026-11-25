@@ -17,7 +17,7 @@
     "cover_icon": "brands/aghaye_eghtesad/logo.png"
   },
   "subtitle": {
-    "font": "Vazirmatn Black",
+    "font": "B Yekan",
     "color": "#FFFFFF",
     "highlight": "#FF4D7A",
     "outline_color": "#002659",
@@ -27,7 +27,9 @@
       "9x16": 296,
       "4x5": 274
     },
-    "words": 2
+    "words": 2,
+    "bold": false,
+    "font_file": "assets/fonts/BYekan.ttf"
   },
   "voice": {
     "elevenlabs": {
@@ -55,6 +57,10 @@
         "#FFFFFF",
         "#D81E4E"
       ]
-    }
-  }
+    },
+    "font": "B Yekan",
+    "font_file": "assets/fonts/BYekan.ttf",
+    "bold": true
+  },
+  "bulletin_font": "B Yekan"
 }
