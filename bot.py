@@ -1145,6 +1145,7 @@ async def hub_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     rows = []
     n_bulletins = sum(1 for b in brands.BRANDS.values() if brands.bulletin_username(b))
+    bulletin_rows = []  # bulletin bots go under the outlet bots
     for b in brands.BRANDS.values():
         name = brands.bot_username(b)
         if name and uid in brands.allowed_users(b):
@@ -1152,7 +1153,9 @@ async def hub_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         bul = brands.bulletin_username(b)
         if bul and uid in brands.allowed_users(b):
             # one bulletin bot: just «بولتن»; several: say whose
-            rows.append([Btn("🗞 بولتن" if n_bulletins == 1 else f"🗞 بولتن {b.name}", url=f"https://t.me/{bul}?start=hub")])
+            bulletin_rows.append([Btn("🗞 بولتن" if n_bulletins == 1 else f"🗞 بولتن {b.name}",
+                                      url=f"https://t.me/{bul}?start=hub")])
+    rows += bulletin_rows
     if not rows:
         await update.effective_message.reply_text("هنوز به ربات هیچ رسانه‌ای دسترسی ندارید.")
         return
