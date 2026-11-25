@@ -1,0 +1,32 @@
+{
+  "name": "انرژی پلاس",
+  "emoji": "🔋",
+  "hashtag": "#انرژی_پلاس",
+  "outlet_en": "Energy Plus, a Persian-language outlet that explains oil, energy and geopolitics news",
+  "voice_id": "",
+  "highlight": "#22D3EE",
+  "order": 4,
+  "subtitle": {
+    "font": "Vazirmatn Bold",
+    "color": "#FFFFFF",
+    "highlight": "#22D3EE",
+    "box": true,
+    "box_color": "#1E3A8A",
+    "box_alpha": 40,
+    "bottom": 600
+  },
+  "voice": {
+    "elevenlabs": {
+      "stability": 0.5
+    },
+    "edge_voice": "fa-IR-DilaraNeural",
+    "edge_rate": "+0%"
+  },
+  "tone": "تحلیلی و آموزشی، آرام و مطمئن؛ اول خبر را می‌گوید و بعد ساده توضیح می‌دهد «چرا مهم است» و «چه اثری دارد»؛ مثل یک کارشناس که برای مخاطب عام توضیح می‌دهد",
+  "files": {
+    "writer_style": "brands/energy_plus/writer_style.md",
+    "template_9x16": "brands/energy_plus/template_9x16.png",
+    "template_4x5": "brands/energy_plus/template_4x5.png",
+    "cover_icon": "brands/energy_plus/icon.png"
+  }
+}

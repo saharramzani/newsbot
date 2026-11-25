@@ -4,7 +4,7 @@
   "hashtag": "#آقای_اقتصاد",
   "outlet_en": "Aghaye Eghtesad (Mr. Economy), a Persian-language outlet about Iran's economy, markets and money",
   "voice_id": "",
-  "highlight": "#22C55E",
+  "highlight": "#4ADE80",
   "order": 2,
   "files": {
     "topics": "brands/aghaye_eghtesad/topics.md",
@@ -15,5 +15,22 @@
     "template_9x16": "brands/aghaye_eghtesad/template_9x16.png",
     "template_4x5": "brands/aghaye_eghtesad/template_4x5.png",
     "cover_icon": "brands/aghaye_eghtesad/icon.png"
-  }
+  },
+  "subtitle": {
+    "font": "Vazirmatn Black",
+    "color": "#FFFFFF",
+    "highlight": "#4ADE80",
+    "box": true,
+    "box_color": "#064E3B",
+    "box_alpha": 50,
+    "bottom": 470
+  },
+  "voice": {
+    "elevenlabs": {
+      "stability": 0.0
+    },
+    "edge_voice": "fa-IR-FaridNeural",
+    "edge_rate": "+8%"
+  },
+  "tone": "صمیمی و ساده‌کننده، مثل یک مشاور اقتصادی خودمانی؛ اصطلاحات اقتصادی را با مثال روزمره توضیح می‌دهد و می‌گوید خبر برای جیب مردم چه معنایی دارد"
 }

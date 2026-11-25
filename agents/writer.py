@@ -38,7 +38,9 @@ MULTI_SOURCE = """
 
 async def write_package(news: dict, feedback: str | None = None, previous: dict | None = None, brand=None) -> dict:
     brand = brands.get(getattr(brand, "key", brand))
-    system = brand.text("writer_style") + (OUTPUT_SPEC + MULTI_SOURCE).replace("{hashtag}", brand.hashtag).replace("{outlet}", brand.name)
+    tone = (f"\n## لحن این رسانه (مهم‌تر از لحن نمونه)\nنریشن و هوک را با این لحن بنویس و narration_tone را هم همین بگذار: "
+            f"{brand.tone}\n") if brand.tone else ""
+    system = brand.text("writer_style") + tone + (OUTPUT_SPEC + MULTI_SOURCE).replace("{hashtag}", brand.hashtag).replace("{outlet}", brand.name)
     user = "خبر ورودی:\n" + json.dumps(news, ensure_ascii=False, indent=2)
     if previous and feedback:
         user += "\n\nنسخه‌ی قبلی:\n" + json.dumps(previous, ensure_ascii=False)

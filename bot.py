@@ -457,12 +457,12 @@ def _prepare(j):
     work.mkdir(parents=True, exist_ok=True)
     brand = brands.get(j.get("brand"))
     audio, engine = _step("ساخت صدا", tts.synthesize_with_info, j["narration"], work / "narration.mp3",
-                          "edge" if j.get("preview") else None, brand.voice_id or None)
+                          "edge" if j.get("preview") else None, brands.voice_id(brand) or None, brand.voice)
     prep["voice_engine"] = engine
     spoken = _step("زمان‌بندی زیرنویس با Whisper", stt.transcribe_words, audio)
     words = stt.align_to_script(j["narration"], spoken)
     ass = video.build_ass(words, work / "subs.ass", group=config.SUBTITLE_WORDS, fmt=prep["fmt"],
-                          highlight=brand.ass_highlight())
+                          highlight=brand.ass_highlight(), style=brand.subtitle)
     total = video.duration(audio) + 0.5
     prep.update(audio=str(audio), ass=str(ass), total=total,
                 sentences=editor.sentences(j["narration"], words, total))

@@ -67,3 +67,9 @@ python3 /opt/newsbot/deploy/bots.py status
 و یک «تحلیل» زیر هر خبر (آبی و جدا از متن خبر؛ بدون واقعیت تازه). راه‌اندازی روی سرور:
 `python3 /opt/newsbot/deploy/bots.py add bulletin bulletin avayenaft` — در منوی News Room هم خودکار اضافه می‌شود.
 تنظیمات اختیاری (در `bots/bulletin.env`): `BULLETIN_HOUR=8`، `BULLETIN_ANALYSIS=on|off`، `BULLETIN_WINDOW=8to8|hours`.
+
+## رسانه‌ها و ربات‌هایشان
+`brands/`: آوای نفت، آقای اقتصاد، انرژی تایم، انرژی پلاس، افق مسکن، معدن گراف. هر کدام سبک زیرنویس (`subtitle`)،
+تنظیم صدا (`voice`) و لحن گوینده (`tone`) خودش را در `brand.json` دارد. صدای ElevenLabs جدا برای هر رسانه:
+`VOICE_ID_<KEY>=...` در `/opt/newsbot/.env` (مثلاً `VOICE_ID_ENERGY_PLUS`). ربات هر رسانه:
+`python3 /opt/newsbot/deploy/bots.py add <name> <key>`.

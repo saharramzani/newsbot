@@ -1,0 +1,38 @@
+{
+  "name": "معدن گراف",
+  "emoji": "⛏",
+  "hashtag": "#معدن_گراف",
+  "outlet_en": "Madan Graph, a Persian-language outlet about mining, metals and the industries and markets around them",
+  "voice_id": "",
+  "highlight": "#D97706",
+  "order": 6,
+  "subtitle": {
+    "font": "Vazirmatn Medium",
+    "color": "#FFFFFF",
+    "highlight": "#D97706",
+    "outline_color": "#1C1917",
+    "outline": 5,
+    "shadow": 4,
+    "bottom": 340,
+    "words": 3,
+    "scale": 0.85
+  },
+  "voice": {
+    "elevenlabs": {
+      "stability": 1.0
+    },
+    "edge_voice": "fa-IR-FaridNeural",
+    "edge_rate": "-2%"
+  },
+  "tone": "داده‌محور و صنعتی، رسمی‌تر و آرام؛ عددها، ظرفیت‌ها، تولید و قیمت‌ها را برجسته می‌کند و اثرشان را بر صنعت و بازار می‌گوید؛ بدون هیجان‌زدگی",
+  "files": {
+    "topics": "brands/madan_graph/topics.md",
+    "filter": "brands/madan_graph/filter.md",
+    "cover_style": "brands/madan_graph/cover_style.md",
+    "bulletin_sections": "brands/madan_graph/bulletin_sections.txt",
+    "writer_style": "brands/madan_graph/writer_style.md",
+    "template_9x16": "brands/madan_graph/template_9x16.png",
+    "template_4x5": "brands/madan_graph/template_4x5.png",
+    "cover_icon": "brands/madan_graph/icon.png"
+  }
+}

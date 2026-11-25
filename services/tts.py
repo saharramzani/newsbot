@@ -30,28 +30,31 @@ def synthesize(text: str, out_path: Path) -> Path:
 
 
 def synthesize_with_info(text: str, out_path: Path, engine: str | None = None,
-                         voice_id: str | None = None) -> tuple[Path, str]:
+                         voice_id: str | None = None, voice: dict | None = None) -> tuple[Path, str]:
     """ElevenLabs first; if its credits run out (or the key stops working) and a fallback is configured, use the
     free Microsoft Edge voice. Returns (path, engine) with engine 'elevenlabs' or 'edge'.
 
     engine='edge' (a free preview) or TTS_ENGINE=edge in .env skips ElevenLabs entirely: no credits are used.
     """
+    voice = voice or {}
+    edge_voice, edge_rate = voice.get("edge_voice") or config.EDGE_VOICE, voice.get("edge_rate") or config.EDGE_RATE
     if (engine or config.TTS_ENGINE) == "edge":
-        return _edge(text, out_path), "edge"
+        return _edge(text, out_path, edge_voice, edge_rate), "edge"
     try:
-        return _elevenlabs(text, out_path, voice_id or config.ELEVENLABS_VOICE_ID), "elevenlabs"
+        return _elevenlabs(text, out_path, voice_id or config.ELEVENLABS_VOICE_ID, voice.get("elevenlabs")), "elevenlabs"
     except ElevenLabsError as e:
         missing_key = not (config.ELEVENLABS_API_KEY and config.ELEVENLABS_VOICE_ID)
         if config.FALLBACK_TTS != "edge" or not (missing_key or e.status in FALLBACK_STATUSES):
             raise
-        return _edge(text, out_path), "edge"
+        return _edge(text, out_path, edge_voice, edge_rate), "edge"
 
 
-def _edge(text: str, out_path: Path) -> Path:
+def _edge(text: str, out_path: Path, voice: str | None = None, rate: str | None = None) -> Path:
+    voice, rate = voice or config.EDGE_VOICE, rate or config.EDGE_RATE
     import asyncio
 
     import edge_tts
-    key = hashlib.sha1(f"edge|{config.EDGE_VOICE}|{config.EDGE_RATE}|{text}".encode()).hexdigest()
+    key = hashlib.sha1(f"edge|{voice}|{rate}|{text}".encode()).hexdigest()
     cached = CACHE_DIR / f"{key}.mp3"
     if cached.exists() and cached.stat().st_size > 1000:
         shutil.copyfile(cached, out_path)
@@ -59,7 +62,7 @@ def _edge(text: str, out_path: Path) -> Path:
     last = None
     for attempt in range(3):
         try:
-            asyncio.run(edge_tts.Communicate(clean_for_tts(text), config.EDGE_VOICE, rate=config.EDGE_RATE)
+            asyncio.run(edge_tts.Communicate(clean_for_tts(text), voice, rate=rate)
                         .save(str(out_path)))
             break
         except Exception as e:
@@ -72,11 +75,11 @@ def _edge(text: str, out_path: Path) -> Path:
     return out_path
 
 
-def _elevenlabs(text: str, out_path: Path, voice_id: str) -> Path:
+def _elevenlabs(text: str, out_path: Path, voice_id: str, settings: dict | None = None) -> Path:
     if not (config.ELEVENLABS_API_KEY and voice_id):
         raise ElevenLabsError("ELEVENLABS_API_KEY / ELEVENLABS_VOICE_ID not set", "invalid_api_key")
     # the same text with the same voice is never paid for twice (rebuilds, retries, a re-cut with another plan)
-    key = hashlib.sha1(f"{voice_id}|{config.ELEVENLABS_MODEL}|{text}".encode()).hexdigest()
+    key = hashlib.sha1(f"{voice_id}|{config.ELEVENLABS_MODEL}|{sorted((settings or {}).items())}|{text}".encode()).hexdigest()
     cached = CACHE_DIR / f"{key}.mp3"
     if cached.exists() and cached.stat().st_size > 1000:
         shutil.copyfile(cached, out_path)
@@ -88,13 +91,17 @@ def _elevenlabs(text: str, out_path: Path, voice_id: str) -> Path:
                 url,
                 params={"output_format": "mp3_44100_128"},
                 headers={"xi-api-key": config.ELEVENLABS_API_KEY},
-                json={"text": clean_for_tts(text), "model_id": config.ELEVENLABS_MODEL},
+                json={"text": clean_for_tts(text), "model_id": config.ELEVENLABS_MODEL,
+                      **({"voice_settings": settings} if settings else {})},
                 timeout=httpx.Timeout(180, connect=30),
             )
         except (httpx.TransportError, OSError):
             if attempt == 3:
                 raise
             time.sleep(5 * (attempt + 1))
+            continue
+        if r.status_code in (400, 422) and settings:  # a setting this model does not accept: use the voice's defaults
+            settings = None
             continue
         if r.status_code in (429, 500, 502, 503, 504) and attempt < 3:
             time.sleep(5 * (attempt + 1))

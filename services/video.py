@@ -22,9 +22,36 @@ def _ts(t: float) -> str:
     return f"{int(h)}:{int(m):02d}:{s:05.2f}"
 
 
-def build_ass(words: list[dict], path: Path, group: int = 3, fmt: str = "9x16", highlight: str | None = None) -> Path:
-    hl = highlight or YELLOW
+def ass_color(hex_rgb: str, alpha: int = 0) -> str:
+    """#RRGGBB (+ transparency 0 = opaque .. 255 = invisible) -> ASS &HAABBGGRR"""
+    h = hex_rgb.lstrip("#")
+    return f"&H{alpha:02X}{h[4:6]}{h[2:4]}{h[0:2]}".upper()
+
+
+def build_ass(words: list[dict], path: Path, group: int = 3, fmt: str = "9x16", highlight: str | None = None,
+              style: dict | None = None) -> Path:
+    """Karaoke-style subtitles. `style` (an outlet's look, all keys optional):
+    font, bold, scale (x SUBTITLE_SIZE), color, highlight, outline_color, outline, shadow,
+    box (coloured box behind the text), box_color, box_alpha (0 opaque .. 255 invisible), bottom (distance from the
+    bottom edge), words (words shown at a time)."""
+    st = style or {}
     f = FORMATS[fmt]
+    size = round(config.SUBTITLE_SIZE * float(st.get("scale", 1.0)))
+    hl = ass_color(st["highlight"]) + "&" if st.get("highlight") else (highlight or YELLOW)
+    base = ass_color(st.get("color", "#FFFFFF"))
+    group = int(st.get("words") or group)
+    bottom = int(st.get("bottom") or f["sub_bottom"])
+    if fmt == "4x5" and st.get("bottom"):  # 4:5 frame is shorter: keep the same proportion
+        bottom = int(bottom * 1350 / 1920)
+    bold = -1 if st.get("bold", True) else 0
+    if st.get("box"):  # opaque/translucent box: BorderStyle 3 paints it in the outline colour
+        border, outline_c = 3, ass_color(st.get("box_color", "#000000"), int(st.get("box_alpha", 60)))
+        outline, shadow = int(size * 0.16), 0
+    else:
+        border, outline_c = 1, ass_color(st.get("outline_color", "#000000"))
+        outline = int(st.get("outline") or max(6, size // 13))
+        shadow = int(st.get("shadow", 2))
+    font = st.get("font") or config.SUBTITLE_FONT
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {f["w"]}
@@ -33,7 +60,7 @@ WrapStyle: 0
 
 [V4+ Styles]
 Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
-Style: Default,{config.SUBTITLE_FONT},{config.SUBTITLE_SIZE},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,{max(6, config.SUBTITLE_SIZE // 13)},2,2,70,100,{f["sub_bottom"]},-1
+Style: Default,{font},{size},{base},&H000000FF,{outline_c},&H80000000,{bold},0,0,0,100,100,0,0,{border},{outline},{shadow},2,70,100,{bottom},-1
 
 [Events]
 Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
@@ -51,7 +78,7 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
             stop = chunk[k + 1]["start"] if k + 1 < len(chunk) else end
             if stop <= start:
                 continue
-            body = " ".join(f"{{\\c{hl}}}{t}{{\\c{WHITE}}}" if j == k else t for j, t in enumerate(clean))
+            body = " ".join(f"{{\\c{hl}}}{t}{{\\c{base}&}}" if j == k else t for j, t in enumerate(clean))
             # Encoding -1 (style) lets libass detect the base direction from the text: Persian -> right-to-left.
             # Newer libass (Windows builds) ignores RLE/PDF embedding marks, so we do not rely on them; a leading
             # RLM (a strong RTL character) keeps lines that start with a Latin word or number right-to-left too.

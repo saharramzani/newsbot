@@ -36,6 +36,9 @@ class Brand:
     highlight: str = "#FBB816"     # subtitle colour of the word being spoken
     order: int = 0
     bot_username: str = ""         # the outlet's own Telegram bot, for the hub menu
+    subtitle: dict = field(default_factory=dict)  # subtitle look, see services/video.build_ass
+    voice: dict = field(default_factory=dict)     # elevenlabs: {...voice_settings}, edge_voice, edge_rate
+    tone: str = ""                 # narrator's tone for this outlet (overrides the tone of the style sample)
     files: dict = field(default_factory=dict)
 
     def path(self, name: str) -> Path:
@@ -90,6 +93,11 @@ def allowed_users(b: Brand) -> set[int]:
     """Who may use an outlet's bot (for the hub menu): ALLOWED_USER_IDS_<KEY> if set, else ALLOWED_USER_IDS."""
     own = config.get(f"ALLOWED_USER_IDS_{b.key.upper()}", "")
     return config.ids(own) if own.strip() else set(config.ALLOWED_USER_IDS)
+
+
+def voice_id(b: Brand) -> str:
+    """The outlet's ElevenLabs voice: VOICE_ID_<KEY> in .env, else voice_id in brand.json, else ELEVENLABS_VOICE_ID."""
+    return config.get(f"VOICE_ID_{b.key.upper()}", "").strip() or b.voice_id
 
 
 def bulletin_username(b: Brand) -> str:

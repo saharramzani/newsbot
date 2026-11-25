@@ -1,0 +1,36 @@
+{
+  "name": "افق مسکن",
+  "emoji": "🏠",
+  "hashtag": "#افق_مسکن",
+  "outlet_en": "Ofogh Maskan, a Persian-language outlet about Iran's housing market and the macroeconomics behind it",
+  "voice_id": "",
+  "highlight": "#EA580C",
+  "order": 5,
+  "subtitle": {
+    "font": "Vazirmatn SemiBold",
+    "color": "#1F2937",
+    "highlight": "#EA580C",
+    "box": true,
+    "box_color": "#FFFFFF",
+    "box_alpha": 25,
+    "bottom": 430
+  },
+  "voice": {
+    "elevenlabs": {
+      "stability": 0.5
+    },
+    "edge_voice": "fa-IR-DilaraNeural",
+    "edge_rate": "+4%"
+  },
+  "tone": "کاربردی و همدلانه، رو به خریدار، مستأجر و سازنده؛ همیشه می‌گوید این خبر برای خرید، اجاره یا سرمایه‌گذاری مسکن یک خانواده چه معنایی دارد؛ صمیمی ولی دقیق",
+  "files": {
+    "topics": "brands/ofogh_maskan/topics.md",
+    "filter": "brands/ofogh_maskan/filter.md",
+    "cover_style": "brands/ofogh_maskan/cover_style.md",
+    "bulletin_sections": "brands/ofogh_maskan/bulletin_sections.txt",
+    "writer_style": "brands/ofogh_maskan/writer_style.md",
+    "template_9x16": "brands/ofogh_maskan/template_9x16.png",
+    "template_4x5": "brands/ofogh_maskan/template_4x5.png",
+    "cover_icon": "brands/ofogh_maskan/icon.png"
+  }
+}

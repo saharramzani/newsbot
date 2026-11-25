@@ -1,0 +1,32 @@
+{
+  "name": "انرژی تایم",
+  "emoji": "⚡",
+  "hashtag": "#انرژی_تایم",
+  "outlet_en": "Energy Time, a Persian-language news outlet about oil, energy and geopolitics",
+  "voice_id": "",
+  "highlight": "#FFFFFF",
+  "order": 3,
+  "subtitle": {
+    "font": "Vazirmatn ExtraBold",
+    "color": "#FFD400",
+    "highlight": "#FFFFFF",
+    "outline_color": "#000000",
+    "outline": 11,
+    "shadow": 3,
+    "bottom": 520
+  },
+  "voice": {
+    "elevenlabs": {
+      "stability": 1.0
+    },
+    "edge_voice": "fa-IR-FaridNeural",
+    "edge_rate": "+12%"
+  },
+  "tone": "خبری، سریع و فشرده، مثل گوینده‌ی بخش خبر؛ جمله‌های کوتاه و دقیق با فعل در اول خبر؛ کم‌احساس و بی‌طرف‌تر از نمونه؛ بدون صفت‌های تند",
+  "files": {
+    "writer_style": "brands/energy_time/writer_style.md",
+    "template_9x16": "brands/energy_time/template_9x16.png",
+    "template_4x5": "brands/energy_time/template_4x5.png",
+    "cover_icon": "brands/energy_time/icon.png"
+  }
+}
