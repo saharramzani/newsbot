@@ -318,7 +318,7 @@ async def bulletin_home(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     span = (f"خبرهای ساعت {config.BULLETIN_HOUR} صبح {docx_out.persian_date(start)} تا {config.BULLETIN_HOUR} صبح "
             f"{docx_out.persian_date(end)}" if start else f"خبرهای {config.BULLETIN_HOURS} ساعت اخیر")
     await update.effective_message.reply_text(
-        f"🗞 ربات بولتن {b.name}\n{span}، با بخش‌های بولتن"
+        f"🗞 ربات بولتن\n{span}، با بخش‌های بولتن"
         + (" و تحلیل زیر هر خبر" if config.BULLETIN_ANALYSIS else "") + "، به‌صورت فایل Word.",
         reply_markup=Markup([[Btn("🗞 ساخت بولتن", callback_data="bul_go")]]))
 
@@ -340,7 +340,10 @@ async def run_bulletin(update, ctx, brand_key: str):
         return
     ctx.chat_data["bulletin_running"] = True
     try:
-        await reply(f"🗞 {brand.label}: در حال جمع‌آوری خبرهای {config.BULLETIN_HOURS} ساعت اخیر و نوشتن بولتن… "
+        who = "" if config.BOT_MODE == "bulletin" else f"{brand.label}: "  # the bulletin bot does not name the outlet
+        span = (f"ساعت {config.BULLETIN_HOUR} صبح دیروز تا {config.BULLETIN_HOUR} صبح امروز"
+                if config.BULLETIN_WINDOW == "8to8" else f"{config.BULLETIN_HOURS} ساعت اخیر")
+        await reply(f"🗞 {who}در حال جمع‌آوری خبرهای {span} و نوشتن بولتن… "
                     "(چند دقیقه)")
         try:
             start, end = bulletin_window()
@@ -358,8 +361,10 @@ async def run_bulletin(update, ctx, brand_key: str):
         folder = config.WORK_DIR / "bulletins"
         folder.mkdir(parents=True, exist_ok=True)
         jy, jm, jd = docx_out.to_jalali(when.year, when.month, when.day)
-        stem = f"bulletin_{brand.key}_{jy}-{jm:02d}-{jd:02d}_{when:%H%M}"
-        name = "" if brand.key == brands.FIRST else brand.name  # the first outlet keeps the approved title
+        stem = (f"bulletin_{jy}-{jm:02d}-{jd:02d}_{when:%H%M}" if config.BOT_MODE == "bulletin"
+                else f"bulletin_{brand.key}_{jy}-{jm:02d}-{jd:02d}_{when:%H%M}")
+        # the first outlet keeps the approved title; the bulletin bot never names the outlet
+        name = "" if brand.key == brands.FIRST or config.BOT_MODE == "bulletin" else brand.name
         clean = docx_out.write(b, folder / f"{stem}.docx", when, outlet=name, period=period)
         review = docx_out.write(b, folder / f"{stem}_links.docx", when, with_links=True, outlet=name, period=period)
         counts = "\n".join(f"• {s['title']}: {len(s['entries'])}" for s in b["sections"])
@@ -370,7 +375,8 @@ async def run_bulletin(update, ctx, brand_key: str):
             note += (f"\n⚠️ {st['items'] - st['sorted']} خبر دسته‌بندی نشد و در بولتن نیامد"
                      + (f" ({b['class_errors'][0][:150]})" if b["class_errors"] else ""))
         await reply(
-            f"✅ بولتن {brand.label} آماده شد ({'۸ صبح تا ۸ صبح؛ ' if config.BULLETIN_WINDOW == '8to8' else ''}{st['items']} خبر در {st['hours']} ساعت اخیر، {st['used']} خبر مرتبط در بخش‌ها):\n{counts}"
+            f"✅ بولتن {'' if config.BOT_MODE == 'bulletin' else brand.label + ' '}آماده شد ({st['items']} خبر از "
+            f"{span}، {st['used']} خبر مرتبط در بخش‌ها):\n{counts}"
             f"{note}\n\nقبل از انتشار حتماً بازبینی کنید؛ فایل دوم زیر هر خبر لینک منبع را دارد.")
         with clean.open("rb") as f:
             await ctx.bot.send_document(chat, f, filename=clean.name, caption="🗞 بولتن (برای انتشار)")
